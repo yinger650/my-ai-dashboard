@@ -1,0 +1,18 @@
+{
+  "name": "AgentBoard Personal",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "install": "pnpm --dir web install --frozen-lockfile && pnpm --dir web build && go build ./...",
+  "terminals": [
+    {
+      "name": "board-server",
+      "command": "bash scripts/dev-server.sh"
+    },
+    {
+      "name": "web",
+      "command": "ABP_BACKEND=http://127.0.0.1:8080 pnpm --dir web dev --host"
+    }
+  ]
+}
