@@ -38,10 +38,10 @@ func (s *Store) CreateService(ctx context.Context, svc *Service) error {
 		svc.Severity = "unknown"
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO services (id, machine_id, service_key, name, type, description, current_state, state_summary, severity, ttl_seconds, enabled, sort_order, metadata_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO services (id, machine_id, service_key, name, type, description, current_state, state_summary, severity, ttl_seconds, last_seen_at, enabled, sort_order, metadata_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		svc.ID, svc.MachineID, svc.ServiceKey, svc.Name, svc.Type, svc.Description, svc.CurrentState,
-		svc.StateSummary, svc.Severity, svc.TTLSeconds, boolToInt(svc.Enabled), svc.SortOrder, svc.MetadataJSON, svc.CreatedAt, svc.UpdatedAt)
+		svc.StateSummary, svc.Severity, svc.TTLSeconds, svc.LastSeenAt, boolToInt(svc.Enabled), svc.SortOrder, svc.MetadataJSON, svc.CreatedAt, svc.UpdatedAt)
 	return err
 }
 
@@ -52,7 +52,11 @@ func (s *Store) GetServiceByID(ctx context.Context, id string) (*Service, error)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	return svc, err
+	if err != nil {
+		return nil, err
+	}
+	svc.ApplyTTL(shared.NowUTC())
+	return svc, nil
 }
 
 // GetServiceByKey returns a non-deleted service by (machine, service_key).
@@ -62,7 +66,11 @@ func (s *Store) GetServiceByKey(ctx context.Context, machineID, key string) (*Se
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	return svc, err
+	if err != nil {
+		return nil, err
+	}
+	svc.ApplyTTL(shared.NowUTC())
+	return svc, nil
 }
 
 // ListServicesByMachine returns non-deleted services for a machine.
@@ -78,6 +86,7 @@ func (s *Store) ListServicesByMachine(ctx context.Context, machineID string) ([]
 		if err != nil {
 			return nil, err
 		}
+		svc.ApplyTTL(shared.NowUTC())
 		out = append(out, svc)
 	}
 	return out, rows.Err()

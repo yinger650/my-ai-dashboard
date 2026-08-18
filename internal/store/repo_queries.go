@@ -76,21 +76,18 @@ func (s *Store) Sparkline(ctx context.Context, machineID string, n int) ([]*Metr
 
 // ServiceSeverityCounts returns counts of enabled services by severity bucket.
 func (s *Store) ServiceSeverityCounts(ctx context.Context, machineID string) (map[string]int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT severity, COUNT(*) FROM services WHERE machine_id = ? AND deleted_at IS NULL AND enabled = 1 GROUP BY severity`, machineID)
+	svcs, err := s.ListServicesByMachine(ctx, machineID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := map[string]int{"normal": 0, "info": 0, "warning": 0, "error": 0, "unknown": 0}
-	for rows.Next() {
-		var sev string
-		var c int
-		if err := rows.Scan(&sev, &c); err != nil {
-			return nil, err
+	for _, svc := range svcs {
+		if !svc.Enabled {
+			continue
 		}
-		out[sev] += c
+		out[svc.Severity]++
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // RecentMachineLogs returns recent warning/error log.append entries for a machine.

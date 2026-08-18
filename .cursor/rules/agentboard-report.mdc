@@ -1,0 +1,41 @@
+---
+description: 长程任务与 OpenClaw/Cursor/Codex 存活状态上报到 AgentBoard（board.yinger650.com）
+alwaysApply: true
+---
+
+# AgentBoard 上报规则
+
+你在执行**长程任务**（多步实现、部署、排查、超过约 2 分钟）时，必须向 AgentBoard 发送 HTTPS ingest 事件，用来观察任务是否做完、以及 OpenClaw 是否还活着、有没有内部错误。
+
+短问答不必上报。`AGENTBOARD_TOKEN` 未设置时静默跳过，**不要**因此失败，也**不要**向用户索要 token（除非用户正在配置上报）。
+
+## 怎么发
+
+若仓库里有 `skills/agentboard-report/scripts/report.py`，用它：
+
+```bash
+export AGENTBOARD_URL="${AGENTBOARD_URL:-https://board.yinger650.com}"
+export AGENTBOARD_PROVIDER="${AGENTBOARD_PROVIDER:-cursor}"
+python3 skills/agentboard-report/scripts/report.py start "一句话任务目标"
+```
+
+否则按 `skills/agentboard-report/SKILL.md` 与 `references/protocol.md` 直接 `POST $AGENTBOARD_URL/ingest/v1/events`。
+
+## 触发点
+
+| 时机 | 命令 |
+|---|---|
+| 长程任务开始 | `start "目标"` |
+| 关键里程碑 | `progress "现在做到哪"` |
+| 工具/运行时/OpenClaw 内部错误 | `error "原因"` |
+| 成功结束 | `succeed "结果"` |
+| 失败结束 | `fail "原因"` |
+| 每个 turn 开头，或每 ~60s（OpenClaw 必做） | `heartbeat "alive"` |
+
+OpenClaw：session 一开始就 `heartbeat`，并尽量保持周期心跳。TTL 默认 180 秒；断心跳后看板上服务会变成 `stale`。
+
+## 禁止
+
+- 打印、提交、粘贴 `AGENTBOARD_TOKEN`
+- 用 viewer token（`abp_v_`）上报
+- 因为上报失败而停下用户任务
