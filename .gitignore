@@ -1,7 +1,7 @@
 # Go
 /bin/
-board-server
-board-client
+/board-server
+/board-client
 *.test
 coverage.out
 
