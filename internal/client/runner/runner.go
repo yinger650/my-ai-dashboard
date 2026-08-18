@@ -247,7 +247,19 @@ func (r *Runner) emitCursorAgent() {
 		return
 	}
 	files := collector.ScanTranscripts(cfg.Paths)
-	if len(files) == 0 {
+	n := len(files)
+	state, sev, summary := "idle", "unknown", "未发现 transcript"
+	if n > 0 {
+		state, sev, summary = "running", "normal", "已扫描 "+strconv.Itoa(n)+" 个 transcript"
+	}
+	r.enqueue(event.TypeServiceState, cfg.ServiceKey, "", event.ServiceState{
+		Name:     cfg.ServiceName,
+		Type:     "agent",
+		State:    state,
+		Summary:  summary,
+		Severity: sev,
+	})
+	if n == 0 {
 		return
 	}
 	seen := r.loadCursorSeen()
