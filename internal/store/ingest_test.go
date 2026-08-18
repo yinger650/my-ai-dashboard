@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"agentboard/internal/event"
 	"agentboard/internal/shared"
@@ -111,6 +113,18 @@ func TestIngestProjectionsAndDuplicates(t *testing.T) {
 	if len(recent) != 1 {
 		t.Fatalf("recent machine logs = %d, want 1", len(recent))
 	}
+	if recent[0].ServiceKey != "nginx" {
+		t.Fatalf("recent log missing service key: %+v", recent[0])
+	}
+
+	pinnedAll, err := st.ListPinnedLogsByMachine(ctx, m.ID)
+	if err != nil || len(pinnedAll) != 1 || pinnedAll[0].Markdown != "pinned" {
+		t.Fatalf("pinned by machine: %v %+v", err, pinnedAll)
+	}
+	machStatuses, err := st.ListStatusesByMachine(ctx, m.ID)
+	if err != nil || len(machStatuses) != 1 || machStatuses[0].ServiceName == "" {
+		t.Fatalf("statuses by machine: %v %+v", err, machStatuses)
+	}
 
 	// duplicate detection
 	dupEnv := mkEnv(t, event.TypeLogAppend, "nginx", "", event.LogPayload{Markdown: "dup", Severity: "info"})
@@ -169,5 +183,53 @@ func TestServiceTokenCannotAutoCreateStatus(t *testing.T) {
 	}
 	if r.Status != "rejected" || r.Code != "not_found" {
 		t.Fatalf("expected not_found, got %+v", r)
+	}
+}
+
+func TestListMachineLogsPagination(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	m := &Machine{MachineKey: "logbox", Name: "Log Box", Kind: "vm", Enabled: true, AutoCreateServices: true}
+	if err := st.CreateMachine(ctx, m); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	auth := IngestAuth{MachineID: m.ID, AutoCreateServices: true}
+	now := shared.NowUTC()
+	received := shared.FormatTime(now)
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeServiceState, "app", "", event.ServiceState{
+		Name: "App", Type: "daemon", State: "running", Severity: "normal",
+	}), auth, received); err != nil || r.Status != "accepted" {
+		t.Fatalf("service.state: %v %+v", err, r)
+	}
+
+	base := now.Add(-time.Minute)
+	for i := 0; i < 5; i++ {
+		env := mkEnv(t, event.TypeLogAppend, "app", "", event.LogPayload{
+			Markdown: fmt.Sprintf("line-%d", i),
+			Severity: "info",
+		})
+		env.OccurredAt = shared.FormatTime(base.Add(time.Duration(i) * time.Second))
+		if r, err := st.IngestEvent(ctx, env, auth, received); err != nil || r.Status != "accepted" {
+			t.Fatalf("append %d: %v %+v", i, err, r)
+		}
+	}
+
+	page, err := st.ListMachineLogs(ctx, m.ID, "", 2)
+	if err != nil || len(page) != 2 {
+		t.Fatalf("first page: %v n=%d", err, len(page))
+	}
+	if page[0].Markdown != "line-4" || page[1].Markdown != "line-3" {
+		t.Fatalf("newest-first mismatch: %+v", page)
+	}
+	older, err := st.ListMachineLogs(ctx, m.ID, page[1].OccurredAt, 2)
+	if err != nil || len(older) != 2 {
+		t.Fatalf("second page: %v n=%d", err, len(older))
+	}
+	if older[0].Markdown != "line-2" {
+		t.Fatalf("cursor did not continue: %+v", older)
+	}
+	all, err := st.ListMachineLogs(ctx, m.ID, "", 50)
+	if err != nil || len(all) != 5 {
+		t.Fatalf("all logs: %v n=%d", err, len(all))
 	}
 }

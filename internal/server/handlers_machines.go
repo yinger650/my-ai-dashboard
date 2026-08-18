@@ -75,12 +75,36 @@ func (s *Server) handleMachineServices(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMachineLogs(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	logs, err := s.st.RecentMachineLogs(r.Context(), id, 50)
+	cursor := r.URL.Query().Get("cursor")
+	limit := 30
+	logs, err := s.st.ListMachineLogs(r.Context(), id, cursor, limit)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	api.WriteData(w, rid, logs, nil)
+	if logs == nil {
+		logs = []store.LogEntry{}
+	}
+	var pinned []store.PinnedLog
+	if cursor == "" {
+		pinned, err = s.st.ListPinnedLogsByMachine(r.Context(), id)
+		if err != nil {
+			api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
+			return
+		}
+		if pinned == nil {
+			pinned = []store.PinnedLog{}
+		}
+	}
+	var next *string
+	if len(logs) == limit {
+		c := logs[len(logs)-1].OccurredAt
+		next = &c
+	}
+	api.WriteData(w, rid, map[string]any{
+		"logs":   logs,
+		"pinned": pinned,
+	}, next)
 }
 
 func (s *Server) handleListMachinesAdmin(w http.ResponseWriter, r *http.Request) {

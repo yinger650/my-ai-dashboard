@@ -118,25 +118,32 @@ type CurrentStatus struct {
 	SortOrder     int     `json:"sort_order"`
 	OccurredAt    string  `json:"occurred_at"`
 	UpdatedAt     string  `json:"updated_at"`
+	ServiceKey    string  `json:"service_key,omitempty"`
+	ServiceName   string  `json:"service_name,omitempty"`
 }
 
 // PinnedLog mirrors pinned_logs.
 type PinnedLog struct {
-	ServiceID  string `json:"service_id"`
-	EventID    string `json:"event_id"`
-	Markdown   string `json:"markdown"`
-	Severity   string `json:"severity"`
-	OccurredAt string `json:"occurred_at"`
-	UpdatedAt  string `json:"updated_at"`
+	ServiceID   string `json:"service_id"`
+	EventID     string `json:"event_id"`
+	Markdown    string `json:"markdown"`
+	Severity    string `json:"severity"`
+	OccurredAt  string `json:"occurred_at"`
+	UpdatedAt   string `json:"updated_at"`
+	ServiceKey  string `json:"service_key,omitempty"`
+	ServiceName string `json:"service_name,omitempty"`
 }
 
 // LogEntry is a projected view of a log.append event.
 type LogEntry struct {
-	EventID    string `json:"event_id"`
-	Markdown   string `json:"markdown"`
-	Severity   string `json:"severity"`
-	Source     string `json:"source,omitempty"`
-	OccurredAt string `json:"occurred_at"`
+	EventID     string `json:"event_id"`
+	Markdown    string `json:"markdown"`
+	Severity    string `json:"severity"`
+	Source      string `json:"source,omitempty"`
+	OccurredAt  string `json:"occurred_at"`
+	ServiceID   string `json:"service_id,omitempty"`
+	ServiceKey  string `json:"service_key,omitempty"`
+	ServiceName string `json:"service_name,omitempty"`
 }
 
 // AccessLog mirrors access_logs.
