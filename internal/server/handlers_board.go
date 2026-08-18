@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agentboard/internal/api"
 	"agentboard/internal/shared"
@@ -220,8 +221,9 @@ func humanDuration(d time.Duration) string {
 
 func oneLine(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 100 {
-		s = s[:100] + "…"
+	if utf8.RuneCountInString(s) <= 100 {
+		return s
 	}
-	return s
+	runes := []rune(s)
+	return string(runes[:100]) + "…"
 }

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"agentboard/internal/store"
 )
@@ -32,5 +34,13 @@ func TestOneLineTruncates(t *testing.T) {
 	}
 	if got[len(got)-len("…"):] != "…" {
 		t.Fatalf("missing ellipsis: %q", got)
+	}
+	cn := strings.Repeat("探测失败", 40)
+	got = oneLine(cn)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated chinese is not valid utf-8: %q", got)
+	}
+	if utf8.RuneCountInString(got) != 101 { // 100 runes + ellipsis
+		t.Fatalf("rune count = %d", utf8.RuneCountInString(got))
 	}
 }

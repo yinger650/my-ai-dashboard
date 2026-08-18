@@ -1,15 +1,17 @@
 version: 1
 
+# 阿里云远程客户端：上报本机指标，并探测若干网站是否可访问。
+# 安装到 /etc/agentboard/client.yaml ，Token 只放环境变量，不要写入本文件。
+
 server:
-  url: "http://127.0.0.1:8080"
-  # The machine token is read from this environment variable, never from the file.
+  url: "https://board.yinger650.com"
   machine_token_env: "ABP_MACHINE_TOKEN"
   timeout: 20s
   tls_insecure_skip_verify: false
 
 machine:
-  key: "home-server"
-  display_name: "家庭服务器"
+  key: "aliyun-web"
+  display_name: "阿里云网站监控"
 
 storage:
   spool_path: "/var/lib/agentboard-client/spool.db"
@@ -38,10 +40,9 @@ collectors:
   ports:
     enabled: true
   systemd:
-    enabled: false
+    enabled: true
     include_all: false
     include:
-      - board-server.service
       - board-client.service
       - nginx.service
       - sshd.service
@@ -59,7 +60,7 @@ collectors:
       - /root/.cursor/projects
       - /root/.cursor-server
   http:
-    enabled: false
+    enabled: true
     timeout: 10s
     follow_redirects: true
     warn_latency: 3s
@@ -70,3 +71,20 @@ collectors:
         url: "https://board.yinger650.com/health/live"
         method: GET
         expect_status: [200]
+      - service_key: site-yinger650
+        name: yinger650.com
+        url: "https://yinger650.com/"
+        method: GET
+        expect_status: [200]
+      - service_key: site-yinger650-www
+        name: www.yinger650.com
+        url: "https://www.yinger650.com/"
+        method: GET
+        expect_status: [200]
+      # 继续追加站点：
+      # - service_key: site-example
+      #   name: 示例站
+      #   url: "https://example.com/"
+      #   method: GET
+      #   expect_status: [200]
+      #   expect_contains: ""
