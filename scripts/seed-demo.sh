@@ -11,11 +11,7 @@ trap 'rm -f "$cookie_jar"' EXIT
 
 login_json=$(curl -sS -c "$cookie_jar" -b "$cookie_jar" -H 'Content-Type: application/json' \
   -d "{\"password\":\"${ADMIN_PW}\"}" "$BASE/auth/login")
-csrf=$(python3 - <<'PY' <<<"$login_json"
-import json,sys
-print(json.load(sys.stdin).get("data",{}).get("csrf_token",""))
-PY
-)
+csrf=$(printf '%s' "$login_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("csrf_token",""))')
 if [[ -z "$csrf" ]]; then
   echo "login failed: $login_json" >&2
   exit 1
@@ -58,13 +54,7 @@ seed_box() {
   local key=$1 name=$2 kind=$3 cpu=$4 memu=$5 memt=$6 disku=$7 diskt=$8
   local created token
   created=$(create_machine "$key" "$name" "$kind")
-  token=$(python3 - <<'PY' <<<"$created"
-import json,sys
-d=json.load(sys.stdin).get("data",{})
-tok=(d.get("token") or {}).get("token")
-print(tok or "")
-PY
-)
+  token=$(printf '%s' "$created" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print(((d.get("token") or {}).get("token")) or "")')
   if [[ -z "$token" ]]; then
     echo "skip $key (already exists or create failed): $created" >&2
     return 0

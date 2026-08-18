@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -77,6 +78,9 @@ func (s *Server) handleMachineLogs(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	cursor := r.URL.Query().Get("cursor")
 	limit := 30
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil {
+		limit = n
+	}
 	logs, err := s.st.ListMachineLogs(r.Context(), id, cursor, limit)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
