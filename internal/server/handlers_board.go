@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,13 +11,6 @@ import (
 	"agentboard/internal/shared"
 	"agentboard/internal/store"
 )
-
-type sparkPoint struct {
-	T   string   `json:"t"`
-	CPU *float64 `json:"cpu"`
-	Mem *float64 `json:"mem"`
-	Net *float64 `json:"net"`
-}
 
 func memPct(m *store.MetricSample) *float64 {
 	if m == nil || m.MemoryUsedBytes == nil || m.MemoryTotalBytes == nil || *m.MemoryTotalBytes == 0 {
@@ -38,17 +32,39 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 		latest, _ := s.st.LatestMetric(ctx, m.ID)
 		health, resSev := machineHealth(m, latest, now)
 		counts, _ := s.st.ServiceSeverityCounts(ctx, m.ID)
-		recent, _ := s.st.RecentMachineLogs(ctx, m.ID, 3)
-		spark, _ := s.st.Sparkline(ctx, m.ID, 30)
+		svcs, _ := s.st.ListServicesByMachine(ctx, m.ID)
+		statuses, _ := s.st.ListStatusesByMachine(ctx, m.ID)
+		pinned, _ := s.st.ListPinnedLogsByMachine(ctx, m.ID)
+		recent, _ := s.st.ListMachineLogs(ctx, m.ID, "", 20)
 
-		points := make([]sparkPoint, 0, len(spark))
-		for _, sp := range spark {
-			var net *float64
-			if sp.NetworkRxBps != nil || sp.NetworkTxBps != nil {
-				v := val(sp.NetworkRxBps) + val(sp.NetworkTxBps)
-				net = &v
+		if svcs == nil {
+			svcs = []*store.Service{}
+		}
+		if statuses == nil {
+			statuses = []store.CurrentStatus{}
+		}
+		if pinned == nil {
+			pinned = []store.PinnedLog{}
+		}
+		if recent == nil {
+			recent = []store.LogEntry{}
+		}
+
+		services := make([]map[string]any, 0, len(svcs))
+		for _, svc := range svcs {
+			if !svc.Enabled {
+				continue
 			}
-			points = append(points, sparkPoint{T: sp.OccurredAt, CPU: sp.CPUPercent, Mem: memPct(sp), Net: net})
+			services = append(services, map[string]any{
+				"id":            svc.ID,
+				"service_key":   svc.ServiceKey,
+				"name":          svc.Name,
+				"type":          svc.Type,
+				"current_state": svc.CurrentState,
+				"state_summary": svc.StateSummary,
+				"severity":      svc.Severity,
+				"last_seen_at":  svc.LastSeenAt,
+			})
 		}
 
 		out = append(out, map[string]any{
@@ -63,8 +79,10 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 			"arch":              m.Arch,
 			"latest_metric":     latest,
 			"service_counts":    counts,
+			"services":          services,
+			"statuses":          statuses,
+			"pinned_logs":       pinned,
 			"recent_logs":       recent,
-			"sparkline":         points,
 		})
 	}
 	return out, nil
@@ -81,11 +99,16 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	since := shared.FormatTime(time.Now().UTC().Add(-time.Hour))
 	abnormal, _ := s.st.AbnormalCountSince(r.Context(), since)
 	title := s.settingString(r, "board_title", "AgentBoard Personal")
+	poll := s.settingInt(r, "poll_interval_seconds", 15)
+	layout := s.settingJSON(r, "board_layout")
 	api.WriteData(w, rid, map[string]any{
-		"title":           title,
-		"machines":        board,
-		"recent_abnormal": abnormal,
-		"server_time":     shared.FormatTime(time.Now().UTC()),
+		"title":                 title,
+		"machines":              board,
+		"recent_abnormal":       abnormal,
+		"server_time":           shared.FormatTime(time.Now().UTC()),
+		"poll_interval_seconds": poll,
+		"layout":                layout,
+		"public_url":            s.cfg.PublicURL,
 	}, nil)
 }
 
@@ -117,14 +140,43 @@ func (s *Server) handleBoardTxt(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&b, "[%s] %-20s %s\n", label, m.Name, metricSummary(latest, m, now))
 		counts, _ := s.st.ServiceSeverityCounts(r.Context(), m.ID)
 		fmt.Fprintf(&b, "  services: %d normal, %d warning, %d error\n", counts["normal"], counts["warning"], counts["error"])
-		recent, _ := s.st.RecentMachineLogs(r.Context(), m.ID, 1)
+		statuses, _ := s.st.ListStatusesByMachine(r.Context(), m.ID)
+		if len(statuses) > 0 {
+			parts := make([]string, 0, len(statuses))
+			for _, st := range statuses {
+				name := st.ServiceKey
+				if name == "" {
+					name = st.ServiceName
+				}
+				parts = append(parts, fmt.Sprintf("%s %s=%s", name, st.Label, statusValueText(st)))
+			}
+			fmt.Fprintf(&b, "  status: %s\n", strings.Join(parts, "  "))
+		}
+		pinned, _ := s.st.ListPinnedLogsByMachine(r.Context(), m.ID)
+		for _, p := range pinned {
+			fmt.Fprintf(&b, "  PIN %s %s\n", strings.ToUpper(p.Severity), oneLine(p.Markdown))
+		}
+		recent, _ := s.st.ListMachineLogs(r.Context(), m.ID, "", 5)
 		for _, l := range recent {
 			fmt.Fprintf(&b, "  %s %s\n", strings.ToUpper(l.Severity), oneLine(l.Markdown))
 		}
+		fmt.Fprintln(&b)
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(b.String()))
+}
+
+func statusValueText(st store.CurrentStatus) string {
+	var v any
+	if err := json.Unmarshal([]byte(st.ValueJSON), &v); err != nil {
+		return st.ValueJSON
+	}
+	text := fmt.Sprint(v)
+	if st.Unit != nil && *st.Unit != "" {
+		return text + *st.Unit
+	}
+	return text
 }
 
 func metricSummary(latest *store.MetricSample, m *store.Machine, now time.Time) string {
@@ -172,11 +224,4 @@ func oneLine(s string) string {
 		s = s[:100] + "…"
 	}
 	return s
-}
-
-func val(p *float64) float64 {
-	if p == nil {
-		return 0
-	}
-	return *p
 }

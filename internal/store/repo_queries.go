@@ -93,9 +93,41 @@ func (s *Store) ServiceSeverityCounts(ctx context.Context, machineID string) (ma
 // RecentMachineLogs returns recent warning/error log.append entries for a machine.
 func (s *Store) RecentMachineLogs(ctx context.Context, machineID string, limit int) ([]LogEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT event_id, severity, occurred_at, payload_json FROM events
-		WHERE machine_id = ? AND event_type = 'log.append' AND severity IN ('warning','error')
-		ORDER BY occurred_at DESC LIMIT ?`, machineID, limit)
+		SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
+		FROM events e
+		LEFT JOIN services sv ON sv.id = e.service_id
+		WHERE e.machine_id = ? AND e.event_type = 'log.append' AND e.severity IN ('warning','error')
+		ORDER BY e.occurred_at DESC LIMIT ?`, machineID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanLogRows(rows)
+}
+
+// ListMachineLogs returns log.append entries for a machine (all severities),
+// newest first, optionally before a cursor (occurred_at).
+func (s *Store) ListMachineLogs(ctx context.Context, machineID, beforeISO string, limit int) ([]LogEntry, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 30
+	}
+	var rows *sql.Rows
+	var err error
+	if beforeISO == "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
+			FROM events e
+			LEFT JOIN services sv ON sv.id = e.service_id
+			WHERE e.machine_id = ? AND e.event_type = 'log.append'
+			ORDER BY e.occurred_at DESC LIMIT ?`, machineID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
+			FROM events e
+			LEFT JOIN services sv ON sv.id = e.service_id
+			WHERE e.machine_id = ? AND e.event_type = 'log.append' AND e.occurred_at < ?
+			ORDER BY e.occurred_at DESC LIMIT ?`, machineID, beforeISO, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -112,9 +144,19 @@ func (s *Store) ListServiceLogs(ctx context.Context, serviceID, beforeISO string
 	var rows *sql.Rows
 	var err error
 	if beforeISO == "" {
-		rows, err = s.db.QueryContext(ctx, `SELECT event_id, severity, occurred_at, payload_json FROM events WHERE service_id = ? AND event_type = 'log.append' ORDER BY occurred_at DESC LIMIT ?`, serviceID, limit)
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
+			FROM events e
+			LEFT JOIN services sv ON sv.id = e.service_id
+			WHERE e.service_id = ? AND e.event_type = 'log.append'
+			ORDER BY e.occurred_at DESC LIMIT ?`, serviceID, limit)
 	} else {
-		rows, err = s.db.QueryContext(ctx, `SELECT event_id, severity, occurred_at, payload_json FROM events WHERE service_id = ? AND event_type = 'log.append' AND occurred_at < ? ORDER BY occurred_at DESC LIMIT ?`, serviceID, beforeISO, limit)
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
+			FROM events e
+			LEFT JOIN services sv ON sv.id = e.service_id
+			WHERE e.service_id = ? AND e.event_type = 'log.append' AND e.occurred_at < ?
+			ORDER BY e.occurred_at DESC LIMIT ?`, serviceID, beforeISO, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -126,13 +168,16 @@ func (s *Store) ListServiceLogs(ctx context.Context, serviceID, beforeISO string
 func scanLogRows(rows *sql.Rows) ([]LogEntry, error) {
 	var out []LogEntry
 	for rows.Next() {
-		var eid, sev, occ, payload string
-		if err := rows.Scan(&eid, &sev, &occ, &payload); err != nil {
+		var eid, sev, occ, payload, sid, skey, sname string
+		if err := rows.Scan(&eid, &sev, &occ, &payload, &sid, &skey, &sname); err != nil {
 			return nil, err
 		}
 		var lp event.LogPayload
 		_ = json.Unmarshal([]byte(payload), &lp)
-		out = append(out, LogEntry{EventID: eid, Markdown: lp.Markdown, Severity: sev, Source: lp.Source, OccurredAt: occ})
+		out = append(out, LogEntry{
+			EventID: eid, Markdown: lp.Markdown, Severity: sev, Source: lp.Source,
+			OccurredAt: occ, ServiceID: sid, ServiceKey: skey, ServiceName: sname,
+		})
 	}
 	return out, rows.Err()
 }
@@ -148,6 +193,29 @@ func (s *Store) GetPinnedLog(ctx context.Context, serviceID string) (*PinnedLog,
 	return &p, err
 }
 
+// ListPinnedLogsByMachine returns pinned logs for all services on a machine.
+func (s *Store) ListPinnedLogsByMachine(ctx context.Context, machineID string) ([]PinnedLog, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.service_id, p.event_id, p.markdown, p.severity, p.occurred_at, p.updated_at, IFNULL(sv.service_key,''), IFNULL(sv.name,'')
+		FROM pinned_logs p
+		JOIN services sv ON sv.id = p.service_id
+		WHERE sv.machine_id = ? AND sv.deleted_at IS NULL
+		ORDER BY p.updated_at DESC`, machineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PinnedLog
+	for rows.Next() {
+		var p PinnedLog
+		if err := rows.Scan(&p.ServiceID, &p.EventID, &p.Markdown, &p.Severity, &p.OccurredAt, &p.UpdatedAt, &p.ServiceKey, &p.ServiceName); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // ListStatuses returns current status items for a service.
 func (s *Store) ListStatuses(ctx context.Context, serviceID string) ([]CurrentStatus, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT service_id, status_key, label, value_json, value_type, unit, severity, display_format, sort_order, occurred_at, updated_at FROM current_status WHERE service_id = ? ORDER BY sort_order, status_key`, serviceID)
@@ -159,6 +227,29 @@ func (s *Store) ListStatuses(ctx context.Context, serviceID string) ([]CurrentSt
 	for rows.Next() {
 		var c CurrentStatus
 		if err := rows.Scan(&c.ServiceID, &c.StatusKey, &c.Label, &c.ValueJSON, &c.ValueType, &c.Unit, &c.Severity, &c.DisplayFormat, &c.SortOrder, &c.OccurredAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ListStatusesByMachine returns current status items for every service on a machine.
+func (s *Store) ListStatusesByMachine(ctx context.Context, machineID string) ([]CurrentStatus, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.service_id, c.status_key, c.label, c.value_json, c.value_type, c.unit, c.severity, c.display_format, c.sort_order, c.occurred_at, c.updated_at, IFNULL(sv.service_key,''), IFNULL(sv.name,'')
+		FROM current_status c
+		JOIN services sv ON sv.id = c.service_id
+		WHERE sv.machine_id = ? AND sv.deleted_at IS NULL AND sv.enabled = 1
+		ORDER BY sv.sort_order, sv.name, c.sort_order, c.status_key`, machineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CurrentStatus
+	for rows.Next() {
+		var c CurrentStatus
+		if err := rows.Scan(&c.ServiceID, &c.StatusKey, &c.Label, &c.ValueJSON, &c.ValueType, &c.Unit, &c.Severity, &c.DisplayFormat, &c.SortOrder, &c.OccurredAt, &c.UpdatedAt, &c.ServiceKey, &c.ServiceName); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

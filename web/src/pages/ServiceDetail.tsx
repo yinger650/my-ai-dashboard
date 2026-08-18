@@ -4,6 +4,7 @@ import { apiDelete, apiGet, apiPost, apiUpload } from "../api";
 import type { Artifact, LogEntry, Machine, PinnedLog, Run, Service, StatusItem } from "../types";
 import { SevDot } from "../components/Severity";
 import { Markdown } from "../components/Markdown";
+import { CollapsibleText } from "../components/CollapsibleText";
 import { fmtBytes, localTime } from "../format";
 
 interface ServiceDetail {
@@ -173,7 +174,7 @@ export function ServiceDetailPage() {
                   {localTime(l.occurred_at)}
                   {l.source && <span className="rounded bg-slate-800 px-1">{l.source}</span>}
                 </div>
-                <Markdown>{l.markdown}</Markdown>
+                <CollapsibleText text={l.markdown} />
               </div>
             ))}
           </div>
