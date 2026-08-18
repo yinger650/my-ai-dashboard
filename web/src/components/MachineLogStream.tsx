@@ -131,6 +131,26 @@ export function MachineLogStream({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {pinned.length > 0 && (
+        <section className="mb-2 min-h-0 shrink-0" aria-label="置顶日志">
+          <div className="mb-1 flex items-center gap-1 text-[11px] text-indigo-300">
+            <Pin className="h-3 w-3" />
+            置顶日志
+          </div>
+          <div className="log-pane max-h-28 overflow-y-auto overscroll-contain rounded-md border border-indigo-500/25 bg-indigo-500/5 px-2 py-1.5 font-mono text-[12px] leading-relaxed">
+            {pinned.map((p, i) => (
+              <div key={p.event_id ?? `${p.occurred_at}-${i}`} className="border-b border-indigo-500/10 py-1 last:border-0">
+                <div className="mb-0.5 flex items-center gap-1 text-[10px] text-indigo-300/80">
+                  {p.service_name && <span>{p.service_name}</span>}
+                  <span className="ml-auto text-slate-500">{localTime(p.occurred_at)}</span>
+                </div>
+                <CollapsibleText text={p.markdown} maxChars={180} />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
         <span>日志</span>
         <button
@@ -148,24 +168,10 @@ export function MachineLogStream({
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="log-pane min-h-0 flex-1 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1.5 font-mono text-[12px] leading-relaxed"
+        aria-label="日志时间线"
+        className="log-pane min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1.5 font-mono text-[12px] leading-relaxed"
       >
-        {pinned.length > 0 && (
-          <div className="sticky top-0 z-10 mb-2 space-y-1 border-b border-slate-800 bg-slate-950/95 pb-2">
-            {pinned.map((p, i) => (
-              <div key={p.event_id ?? `${p.occurred_at}-${i}`} className="rounded bg-indigo-500/10 px-2 py-1">
-                <div className="mb-0.5 flex items-center gap-1 text-[10px] text-indigo-300">
-                  <Pin className="h-3 w-3" />
-                  置顶
-                  {p.service_name && <span className="text-slate-500">· {p.service_name}</span>}
-                  <span className="ml-auto text-slate-500">{localTime(p.occurred_at)}</span>
-                </div>
-                <CollapsibleText text={p.markdown} maxChars={180} />
-              </div>
-            ))}
-          </div>
-        )}
-        {logs.length === 0 && pinned.length === 0 && (
+        {logs.length === 0 && (
           <div className="py-6 text-center text-slate-600">暂无日志</div>
         )}
         {logs.map((l) => (

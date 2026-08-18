@@ -60,9 +60,12 @@ export function MachineCard({
         ↓ {fmtBps(lm?.network_rx_bps ?? null)} · ↑ {fmtBps(lm?.network_tx_bps ?? null)}
       </div>
 
-      <div className="mb-2 max-h-28 overflow-hidden">
-        <StatusList services={m.services ?? []} statuses={m.statuses ?? []} collapsedCount={5} />
-      </div>
+      <section className="mb-2 min-h-0 shrink-0" aria-label="服务状态">
+        <div className="mb-1 text-[11px] text-slate-500">状态</div>
+        <div className="log-pane max-h-40 overflow-y-auto overscroll-contain rounded-md border border-slate-800 bg-slate-950/50 px-2 py-1.5">
+          <StatusList services={m.services ?? []} statuses={m.statuses ?? []} collapsedCount="all" />
+        </div>
+      </section>
 
       <MachineLogStream
         machineId={m.id}

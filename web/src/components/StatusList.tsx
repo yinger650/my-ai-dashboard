@@ -21,14 +21,15 @@ export function StatusList({
 }: {
   services: BoardService[];
   statuses: StatusItem[];
-  collapsedCount?: number;
+  collapsedCount?: number | "all";
 }) {
   const [open, setOpen] = useState(false);
   const items = buildRows(services, statuses);
   if (items.length === 0) {
     return <div className="py-1 text-xs text-slate-500">暂无状态</div>;
   }
-  const shown = open ? items : items.slice(0, collapsedCount);
+  const cap = collapsedCount === "all" ? items.length : collapsedCount;
+  const shown = open || collapsedCount === "all" ? items : items.slice(0, cap);
   const hidden = items.length - shown.length;
 
   return (
@@ -54,7 +55,7 @@ export function StatusList({
           </div>
         </div>
       ))}
-      {items.length > collapsedCount && (
+      {collapsedCount !== "all" && items.length > collapsedCount && (
         <button
           type="button"
           onClick={(e) => {
