@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0b1020;
+  color: #e6ebf5;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* Status colors (spec 16.1). Applied to text/borders/dots. */
+.sev-normal { color: #34d399; }
+.sev-info { color: #60a5fa; }
+.sev-warning { color: #fbbf24; }
+.sev-error { color: #f87171; }
+.sev-unknown { color: #9ca3af; }
+.sev-offline { color: #6b7280; }
+
+.bg-sev-normal { background-color: #34d399; }
+.bg-sev-info { background-color: #60a5fa; }
+.bg-sev-warning { background-color: #fbbf24; }
+.bg-sev-error { background-color: #f87171; }
+.bg-sev-unknown { background-color: #9ca3af; }
+.bg-sev-offline { background-color: #6b7280; }
+
+.card {
+  background: #0f1626;
+  border: 1px solid #1f2a44;
+  border-radius: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+.markdown-body p { margin: 0.25rem 0; }
+.markdown-body code {
+  background: #1f2a44;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.markdown-body a { color: #60a5fa; text-decoration: underline; }

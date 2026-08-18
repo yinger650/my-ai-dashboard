@@ -1,0 +1,36 @@
+version: 1
+
+server:
+  url: "http://127.0.0.1:8080"
+  # The machine token is read from this environment variable, never from the file.
+  machine_token_env: "ABP_MACHINE_TOKEN"
+  timeout: 20s
+  tls_insecure_skip_verify: false
+
+machine:
+  key: "home-server"
+  display_name: "家庭服务器"
+
+storage:
+  spool_path: "/var/lib/agentboard-client/spool.db"
+  max_events: 50000
+
+intervals:
+  heartbeat: 30s
+  metrics: 30s
+  ports: 1h
+
+collectors:
+  cpu: true
+  memory: true
+  filesystems:
+    enabled: true
+    include_mounts: ["/"]
+    exclude_fs_types: ["tmpfs", "devtmpfs", "overlay", "squashfs"]
+  disk_io:
+    enabled: true
+  network:
+    enabled: true
+    exclude_interfaces: ["lo", "veth*", "docker*"]
+  ports:
+    enabled: true
