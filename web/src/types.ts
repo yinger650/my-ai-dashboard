@@ -20,13 +20,20 @@ export interface LogEntry {
   severity: string;
   source?: string;
   occurred_at: string;
+  service_id?: string;
+  service_key?: string;
+  service_name?: string;
 }
 
-export interface SparkPoint {
-  t: string;
-  cpu: number | null;
-  mem: number | null;
-  net: number | null;
+export interface BoardService {
+  id: string;
+  service_key: string;
+  name: string;
+  type: string;
+  current_state: string;
+  state_summary: string;
+  severity: string;
+  last_seen_at: string | null;
 }
 
 export interface ServiceCounts {
@@ -49,8 +56,10 @@ export interface BoardMachine {
   arch: string | null;
   latest_metric: MetricSample | null;
   service_counts: ServiceCounts;
+  services: BoardService[] | null;
+  statuses: StatusItem[] | null;
+  pinned_logs: PinnedLog[] | null;
   recent_logs: LogEntry[] | null;
-  sparkline: SparkPoint[] | null;
 }
 
 export interface Board {
@@ -58,6 +67,9 @@ export interface Board {
   machines: BoardMachine[];
   recent_abnormal: number;
   server_time: string;
+  poll_interval_seconds?: number;
+  layout?: unknown;
+  public_url?: string;
 }
 
 export interface Machine {
@@ -100,6 +112,9 @@ export interface StatusItem {
   severity: string;
   display_format: string;
   sort_order: number;
+  service_id?: string;
+  service_key?: string;
+  service_name?: string;
 }
 
 export interface Run {
@@ -118,6 +133,22 @@ export interface PinnedLog {
   markdown: string;
   severity: string;
   occurred_at: string;
+  service_id?: string;
+  service_key?: string;
+  service_name?: string;
+  event_id?: string;
+}
+
+export interface MachineLogsPage {
+  logs: LogEntry[];
+  pinned?: PinnedLog[] | null;
+}
+
+export interface SparkPoint {
+  t: string;
+  cpu: number | null;
+  mem: number | null;
+  net: number | null;
 }
 
 export interface AccessLog {

@@ -23,9 +23,36 @@ async function handle<T>(res: Response): Promise<T> {
   return body.data as T;
 }
 
+export interface Page<T> {
+  data: T;
+  nextCursor: string | null;
+}
+
+async function handlePage<T>(res: Response): Promise<Page<T>> {
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.error?.message) msg = body.error.message;
+    } catch {
+      // ignore
+    }
+    const err = new Error(msg) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+  const body = await res.json();
+  return { data: body.data as T, nextCursor: body.meta?.next_cursor ?? null };
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(path, { credentials: "same-origin" });
   return handle<T>(res);
+}
+
+export async function apiGetPage<T>(path: string): Promise<Page<T>> {
+  const res = await fetch(path, { credentials: "same-origin" });
+  return handlePage<T>(res);
 }
 
 function mutate<T>(method: string, path: string, body?: unknown): Promise<T> {
