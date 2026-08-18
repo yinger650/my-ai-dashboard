@@ -55,7 +55,10 @@ def service_meta(provider: str) -> tuple[str, str]:
 
 def run_key_path() -> Path:
     base = env("AGENTBOARD_STATE_DIR") or os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
-    ident = env("AGENTBOARD_RUN_FILE") or f"agentboard-run-{os.getppid()}-{os.getpid()}"
+    ident = env("AGENTBOARD_RUN_FILE")
+    if not ident:
+        key = env("AGENTBOARD_SERVICE_KEY") or infer_provider()
+        ident = f"agentboard-run-{key}"
     return Path(base) / ident
 
 
