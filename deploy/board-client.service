@@ -1,0 +1,21 @@
+[Unit]
+Description=AgentBoard Personal board-client
+After=network-online.target board-server.service
+Wants=network-online.target
+Requires=board-server.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/agentboard/board-client.env
+ExecStart=/opt/agentboard/bin/board-client run --config /etc/agentboard/client.yaml
+WorkingDirectory=/opt/agentboard
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

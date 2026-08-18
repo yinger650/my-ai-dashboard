@@ -9,14 +9,17 @@ export function setCSRF(token: string | null) {
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
+    let code: string | undefined;
     try {
       const body = await res.json();
       if (body?.error?.message) msg = body.error.message;
+      if (body?.error?.code) code = body.error.code;
     } catch {
       // ignore
     }
-    const err = new Error(msg) as Error & { status?: number };
+    const err = new Error(msg) as Error & { status?: number; code?: string };
     err.status = res.status;
+    err.code = code;
     throw err;
   }
   const body = await res.json();
@@ -31,18 +34,32 @@ export interface Page<T> {
 async function handlePage<T>(res: Response): Promise<Page<T>> {
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
+    let code: string | undefined;
     try {
       const body = await res.json();
       if (body?.error?.message) msg = body.error.message;
+      if (body?.error?.code) code = body.error.code;
     } catch {
       // ignore
     }
-    const err = new Error(msg) as Error & { status?: number };
+    const err = new Error(msg) as Error & { status?: number; code?: string };
     err.status = res.status;
+    err.code = code;
     throw err;
   }
   const body = await res.json();
   return { data: body.data as T, nextCursor: body.meta?.next_cursor ?? null };
+}
+
+export function getCSRF(): string | null {
+  return csrfToken;
+}
+
+export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+  const res = await fetch(path, { method: "POST", credentials: "same-origin", headers, body: form });
+  return handle<T>(res);
 }
 
 export async function apiGet<T>(path: string): Promise<T> {

@@ -13,9 +13,9 @@ var ErrNotFound = errors.New("not found")
 
 // GetAdminCredentials returns the single admin credential row, or ErrNotFound.
 func (s *Store) GetAdminCredentials(ctx context.Context) (*AdminCredentials, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT password_hash, totp_secret_encrypted, failed_attempts, locked_until, updated_at FROM admin_credentials WHERE id = 1`)
+	row := s.db.QueryRowContext(ctx, `SELECT password_hash, totp_secret_encrypted, recovery_codes_hash_json, failed_attempts, locked_until, updated_at FROM admin_credentials WHERE id = 1`)
 	var a AdminCredentials
-	err := row.Scan(&a.PasswordHash, &a.TOTPSecretEncrypted, &a.FailedAttempts, &a.LockedUntil, &a.UpdatedAt)
+	err := row.Scan(&a.PasswordHash, &a.TOTPSecretEncrypted, &a.RecoveryCodesHashJSON, &a.FailedAttempts, &a.LockedUntil, &a.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -45,6 +45,30 @@ func (s *Store) SetAdminPassword(ctx context.Context, hash string) error {
 		VALUES (1, ?, 0, ?)
 		ON CONFLICT(id) DO UPDATE SET password_hash = excluded.password_hash, failed_attempts = 0, locked_until = NULL, updated_at = excluded.updated_at`,
 		hash, now)
+	return err
+}
+
+// SetAdminTOTP stores the encrypted TOTP secret and recovery-code hashes.
+func (s *Store) SetAdminTOTP(ctx context.Context, secretEnc, recoveryJSON string) error {
+	now := shared.FormatTime(shared.NowUTC())
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE admin_credentials SET totp_secret_encrypted = ?, recovery_codes_hash_json = ?, updated_at = ? WHERE id = 1`,
+		secretEnc, recoveryJSON, now)
+	return err
+}
+
+// ClearAdminTOTP disables TOTP and clears recovery codes.
+func (s *Store) ClearAdminTOTP(ctx context.Context) error {
+	now := shared.FormatTime(shared.NowUTC())
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE admin_credentials SET totp_secret_encrypted = NULL, recovery_codes_hash_json = NULL, updated_at = ? WHERE id = 1`, now)
+	return err
+}
+
+// SetRecoveryCodesHashJSON replaces the hashed recovery-code list.
+func (s *Store) SetRecoveryCodesHashJSON(ctx context.Context, recoveryJSON string) error {
+	now := shared.FormatTime(shared.NowUTC())
+	_, err := s.db.ExecContext(ctx, `UPDATE admin_credentials SET recovery_codes_hash_json = ?, updated_at = ? WHERE id = 1`, recoveryJSON, now)
 	return err
 }
 

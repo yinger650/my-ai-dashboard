@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Copy, KeyRound, Server, Terminal } from "lucide-react";
+import { Copy, KeyRound, Server, Shield, Terminal } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api";
 import type { Machine, TokenInfo } from "../types";
 import { localTime } from "../format";
@@ -32,10 +32,15 @@ export function SettingsPage() {
   const qc = useQueryClient();
   const [revealToken, setRevealToken] = useState<CreatedToken | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+  const [totpSetup, setTotpSetup] = useState<{ secret: string; otpauth_url: string } | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [totpPassword, setTotpPassword] = useState("");
 
   const machines = useQuery({ queryKey: ["admin-machines"], queryFn: () => apiGet<Machine[]>("/api/v1/admin/machines") });
   const tokens = useQuery({ queryKey: ["admin-tokens"], queryFn: () => apiGet<TokenInfo[]>("/api/v1/admin/tokens") });
   const settings = useQuery({ queryKey: ["admin-settings"], queryFn: () => apiGet<AdminSettings>("/api/v1/admin/settings") });
+  const totp = useQuery({ queryKey: ["admin-totp"], queryFn: () => apiGet<{ enabled: boolean }>("/api/v1/admin/totp") });
 
   const [mKey, setMKey] = useState("");
   const [mName, setMName] = useState("");
@@ -95,6 +100,40 @@ export function SettingsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin-settings"] });
       qc.invalidateQueries({ queryKey: ["board"] });
+    },
+  });
+
+  const startTotp = useMutation({
+    mutationFn: () => apiPost<{ secret: string; otpauth_url: string }>("/api/v1/admin/totp/setup", {}),
+    onSuccess: (data) => {
+      setTotpSetup(data);
+      setTotpCode("");
+    },
+  });
+  const confirmTotp = useMutation({
+    mutationFn: () => apiPost<{ enabled: boolean; recovery_codes: string[] }>("/api/v1/admin/totp/confirm", { code: totpCode }),
+    onSuccess: (data) => {
+      setRecoveryCodes(data.recovery_codes);
+      setTotpSetup(null);
+      setTotpCode("");
+      qc.invalidateQueries({ queryKey: ["admin-totp"] });
+      qc.invalidateQueries({ queryKey: ["session"] });
+    },
+  });
+  const disableTotp = useMutation({
+    mutationFn: () => apiPost("/api/v1/admin/totp/disable", { password: totpPassword, code: totpCode }),
+    onSuccess: () => {
+      setTotpCode("");
+      setTotpPassword("");
+      qc.invalidateQueries({ queryKey: ["admin-totp"] });
+      qc.invalidateQueries({ queryKey: ["session"] });
+    },
+  });
+  const regenRecovery = useMutation({
+    mutationFn: () => apiPost<{ recovery_codes: string[] }>("/api/v1/admin/totp/recovery", { code: totpCode }),
+    onSuccess: (data) => {
+      setRecoveryCodes(data.recovery_codes);
+      setTotpCode("");
     },
   });
 
@@ -187,6 +226,71 @@ export function SettingsPage() {
             onCopy={() => copy(ingestUrl, "ingest")}
             copied={copied === "ingest"}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-indigo-400" /> 双因素认证（TOTP）
+          </CardTitle>
+          <CardDescription>
+            当前状态：{totp.data?.enabled ? "已启用" : "未启用"}。启用后登录必须提供验证器验证码或一次性恢复码。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {!totp.data?.enabled && !totpSetup && (
+            <Button onClick={() => startTotp.mutate()} disabled={startTotp.isPending}>
+              开始启用 TOTP
+            </Button>
+          )}
+          {totpSetup && (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-300">在验证器中添加密钥，或打开 otpauth URL：</p>
+              <div className="break-all rounded-md bg-slate-900 p-3 font-mono text-xs">{totpSetup.secret}</div>
+              <div className="break-all rounded-md bg-slate-900 p-3 font-mono text-xs text-slate-400">{totpSetup.otpauth_url}</div>
+              <div className="flex flex-wrap items-end gap-2">
+                <Input
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value)}
+                  placeholder="输入 6 位验证码确认"
+                  className="w-56"
+                />
+                <Button disabled={!totpCode || confirmTotp.isPending} onClick={() => confirmTotp.mutate()}>
+                  确认启用
+                </Button>
+              </div>
+              {confirmTotp.error && <div className="text-sm sev-error">{(confirmTotp.error as Error).message}</div>}
+            </div>
+          )}
+          {totp.data?.enabled && (
+            <div className="flex flex-wrap items-end gap-2">
+              <Input
+                type="password"
+                value={totpPassword}
+                onChange={(e) => setTotpPassword(e.target.value)}
+                placeholder="当前密码"
+                className="w-44"
+              />
+              <Input
+                value={totpCode}
+                onChange={(e) => setTotpCode(e.target.value)}
+                placeholder="TOTP 或恢复码"
+                className="w-44"
+              />
+              <Button
+                variant="outline"
+                disabled={!totpPassword || !totpCode || disableTotp.isPending}
+                onClick={() => disableTotp.mutate()}
+              >
+                关闭 TOTP
+              </Button>
+              <Button variant="outline" disabled={!totpCode || regenRecovery.isPending} onClick={() => regenRecovery.mutate()}>
+                重新生成恢复码
+              </Button>
+              {disableTotp.error && <div className="w-full text-sm sev-error">{(disableTotp.error as Error).message}</div>}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -303,6 +407,26 @@ export function SettingsPage() {
               {copied === "tok" ? "已复制" : "复制"}
             </Button>
             <Button onClick={() => setRevealToken(null)}>关闭</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!recoveryCodes} onOpenChange={(o) => !o && setRecoveryCodes(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>恢复码</DialogTitle>
+            <DialogDescription>请立即抄写保存。每个恢复码只能使用一次，关闭后无法再查看。</DialogDescription>
+          </DialogHeader>
+          <ul className="mb-4 space-y-1 font-mono text-sm">
+            {(recoveryCodes ?? []).map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => recoveryCodes && copy(recoveryCodes.join("\n"), "rec")}>
+              {copied === "rec" ? "已复制" : "复制全部"}
+            </Button>
+            <Button onClick={() => setRecoveryCodes(null)}>关闭</Button>
           </div>
         </DialogContent>
       </Dialog>

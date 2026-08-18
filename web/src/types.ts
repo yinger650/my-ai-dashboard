@@ -177,3 +177,12 @@ export interface TokenInfo {
   enabled: boolean;
   revoked_at: string | null;
 }
+
+export interface Artifact {
+  id: string;
+  original_name: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: string;
+  sha256: string;
+}
