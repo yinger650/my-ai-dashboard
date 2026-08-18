@@ -1,0 +1,35 @@
+version: 1
+
+server:
+  url: "http://127.0.0.1:8090"
+  machine_token_env: "ABP_MACHINE_TOKEN"
+  timeout: 20s
+  tls_insecure_skip_verify: false
+
+machine:
+  key: "vm-16-3-opencloudos"
+  display_name: "腾讯云 OpenCloudOS"
+
+storage:
+  spool_path: "/var/lib/agentboard-client/spool.db"
+  max_events: 50000
+
+intervals:
+  heartbeat: 30s
+  metrics: 30s
+  ports: 1h
+
+collectors:
+  cpu: true
+  memory: true
+  filesystems:
+    enabled: true
+    include_mounts: ["/"]
+    exclude_fs_types: ["tmpfs", "devtmpfs", "overlay", "squashfs"]
+  disk_io:
+    enabled: true
+  network:
+    enabled: true
+    exclude_interfaces: ["lo", "veth*", "docker*"]
+  ports:
+    enabled: true
