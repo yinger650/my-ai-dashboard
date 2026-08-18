@@ -70,6 +70,24 @@ export ABP_MACHINE_TOKEN='abp_m_...'      # 上一步复制的完整 Token
 
 看板上对应机器卡片将在数秒内出现实时 CPU / 内存 / 磁盘 / 网络指标。
 
+## 远程客户端（阿里云网站探测）
+
+在另一台 Linux 机器（例如阿里云）上只跑 `board-client`，把本机指标和若干网站的 HTTP 探测结果报到 https://board.yinger650.com 。不需要在该机器上安装 `board-server`。
+
+1. 在看板 **设置** 页创建机器，`machine_key` 填 `aliyun-web`（或与 YAML 里一致），复制 Machine Token。
+2. 交叉编译客户端：`make build-all`，把 `bin/board-client-linux-amd64` 拷到服务器 `/opt/agentboard/bin/board-client`。
+3. 把 `deploy/client-aliyun.yaml` 拷到 `/etc/agentboard/client.yaml`，按实际站点改 `collectors.http.targets`。
+4. 把 `deploy/board-client.env.example` 拷到 `/etc/agentboard/board-client.env`，写入 `ABP_MACHINE_TOKEN=abp_m_...`（不要入库）。
+5. 安装远程 unit（不依赖本机 `board-server`）：
+
+```bash
+install -m 644 deploy/board-client-remote.service /etc/systemd/system/board-client.service
+systemctl daemon-reload
+systemctl enable --now board-client
+```
+
+每个探测目标会在该机器下自动创建一条 **virtual** 服务：正常为 `running`，非期望状态码 / 超时 / 连接失败为 `failed`，并带上 HTTP 状态码、延迟、证书剩余天数。状态变化时写一条日志。探测间隔默认 60 秒。
+
 ## 本地开发（后端 + 前端 + 客户端同步运行）
 
 ```bash
@@ -120,7 +138,7 @@ make test-web
 
 ## 实现范围
 
-**已实现（可端到端运行）：** SQLite + goose 迁移；管理员 Argon2id 密码 + 会话 + CSRF；TOTP（RFC 6238）与一次性恢复码；Machine/Service/Token CRUD 与一次性 Token；Event 采集（heartbeat/metric/service.state/status.upsert/log.append/log.pin/run.transition/`machine.service_snapshot`）、`event_id` 幂等、Machine Token 自动创建 Service、Run 状态机与非法转换拒绝、**service TTL 过期投影**；Artifact 上传/下载/图片预览与全局配额；Board / board.txt / Machine 详情 / Service 详情查询；访问日志与限流；Go 客户端真实 `/proc` 采集（CPU/内存/文件系统/磁盘 IO/网络/端口）+ systemd unit 快照 + Cursor Agent transcript 扫描与启发式日志总结 + SQLite spool + 批量发送/退避重试；**Cursor/Codex/OpenClaw HTTP 上报 skill + rule**；React 响应式看板（登录、Dashboard、机器详情、服务详情含附件与「生成日志总结」、访问记录、设置含 TOTP）；安全 Markdown 渲染；Go + 前端单元/集成测试。
+**已实现（可端到端运行）：** SQLite + goose 迁移；管理员 Argon2id 密码 + 会话 + CSRF；TOTP（RFC 6238）与一次性恢复码；Machine/Service/Token CRUD 与一次性 Token；Event 采集（heartbeat/metric/service.state/status.upsert/log.append/log.pin/run.transition/`machine.service_snapshot`）、`event_id` 幂等、Machine Token 自动创建 Service、Run 状态机与非法转换拒绝、**service TTL 过期投影**；Artifact 上传/下载/图片预览与全局配额；Board / board.txt / Machine 详情 / Service 详情查询；访问日志与限流；Go 客户端真实 `/proc` 采集（CPU/内存/文件系统/磁盘 IO/网络/端口）+ systemd unit 快照 + **HTTP 网站探测** + Cursor Agent transcript 扫描与启发式日志总结 + SQLite spool + 批量发送/退避重试；**Cursor/Codex/OpenClaw HTTP 上报 skill + rule**；React 响应式看板（登录、Dashboard、机器详情、服务详情含附件与「生成日志总结」、访问记录、设置含 TOTP）；安全 Markdown 渲染；Go + 前端单元/集成测试。
 
 **尚未实现（规格后续里程碑 M8）：** Playwright E2E；Docker/Caddy 部署与备份恢复；每日字节配额落库与全部安全测试用例。这些不影响当前 M1–M7 核心链路的运行。
 

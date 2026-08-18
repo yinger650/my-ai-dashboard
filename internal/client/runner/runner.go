@@ -36,6 +36,7 @@ type Runner struct {
 	bootID   string
 	seq      int64
 	seenPath string
+	httpPrev map[string]bool
 }
 
 // New constructs a Runner.
@@ -48,6 +49,7 @@ func New(cfg *config.Config, sp *spool.Spool, log *slog.Logger) *Runner {
 		log:      log,
 		bootID:   shared.NewID(),
 		seenPath: filepath.Join(filepath.Dir(cfg.Storage.SpoolPath), "cursor-seen.json"),
+		httpPrev: map[string]bool{},
 	}
 }
 
@@ -80,6 +82,7 @@ func (r *Runner) CollectOnce() {
 	r.emitSelfStatus()
 	r.emitSystemd()
 	r.emitCursorAgent()
+	r.emitHTTP()
 }
 
 func (r *Runner) emitHeartbeat() {
@@ -87,7 +90,7 @@ func (r *Runner) emitHeartbeat() {
 		Hostname:                 r.cfg.Machine.DisplayName,
 		OS:                       "linux",
 		Arch:                     "amd64",
-		CollectorVersion:         "1.1.0",
+		CollectorVersion:         "1.2.0",
 		HeartbeatIntervalSeconds: int(r.cfg.Intervals.Heartbeat.Duration.Seconds()),
 		UptimeSeconds:            r.col.Uptime(),
 	})
@@ -162,12 +165,14 @@ func (r *Runner) Run(ctx context.Context) {
 	portsT := time.NewTicker(r.cfg.Intervals.Ports.Duration)
 	sysT := time.NewTicker(r.cfg.Intervals.Systemd.Duration)
 	curT := time.NewTicker(r.cfg.Intervals.CursorAgent.Duration)
+	httpT := time.NewTicker(r.cfg.Intervals.HTTP.Duration)
 	logT := time.NewTicker(time.Minute)
 	defer metricT.Stop()
 	defer hbT.Stop()
 	defer portsT.Stop()
 	defer sysT.Stop()
 	defer curT.Stop()
+	defer httpT.Stop()
 	defer logT.Stop()
 
 	for {
@@ -186,6 +191,8 @@ func (r *Runner) Run(ctx context.Context) {
 			r.emitSystemd()
 		case <-curT.C:
 			r.emitCursorAgent()
+		case <-httpT.C:
+			r.emitHTTP()
 		case <-logT.C:
 			r.emitSelfLog("采集心跳正常，最近一分钟无异常。", "info")
 		}
@@ -304,6 +311,57 @@ func (r *Runner) emitCursorAgent() {
 			Markdown: md,
 			Severity: "info",
 			Source:   "cursor-agent",
+		})
+	}
+}
+
+func (r *Runner) emitHTTP() {
+	cfg := r.cfg.Collectors.HTTP
+	if !cfg.Enabled || len(cfg.Targets) == 0 {
+		return
+	}
+	targets := make([]collector.HTTPTarget, 0, len(cfg.Targets))
+	for _, t := range cfg.Targets {
+		targets = append(targets, collector.HTTPTarget{
+			ServiceKey:     t.ServiceKey,
+			Name:           t.Name,
+			URL:            t.URL,
+			Method:         t.Method,
+			ExpectStatus:   t.ExpectStatus,
+			ExpectContains: t.ExpectContains,
+			Headers:        t.Headers,
+			TLSInsecure:    t.TLSInsecure,
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout.Duration+2*time.Second)
+	defer cancel()
+	results := collector.ProbeAll(ctx, cfg.Timeout.Duration, r.cfg.HTTPFollowRedirects(), targets)
+	for _, res := range results {
+		key := res.Target.ServiceKey
+		if key == "" {
+			continue
+		}
+		r.enqueue(event.TypeServiceState, key, "", res.ServiceState(cfg.TTLSeconds, cfg.WarnLatency.Duration))
+		items := res.StatusItems(cfg.WarnLatency.Duration)
+		if len(items) > 0 {
+			r.enqueue(event.TypeStatusUpsert, key, "", event.StatusUpsert{Items: items})
+		}
+		prev, seen := r.httpPrev[key]
+		r.httpPrev[key] = res.OK
+		if !seen && res.OK {
+			continue
+		}
+		if seen && prev == res.OK {
+			continue
+		}
+		sev := "error"
+		if res.OK {
+			sev = "info"
+		}
+		r.enqueue(event.TypeLogAppend, key, "", event.LogPayload{
+			Markdown: res.LogMarkdown(),
+			Severity: sev,
+			Source:   "http-probe",
 		})
 	}
 }

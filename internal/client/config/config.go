@@ -3,8 +3,10 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -46,6 +48,7 @@ type Config struct {
 		Ports       Duration `yaml:"ports"`
 		Systemd     Duration `yaml:"systemd"`
 		CursorAgent Duration `yaml:"cursor_agent"`
+		HTTP        Duration `yaml:"http"`
 	} `yaml:"intervals"`
 	Collectors struct {
 		CPU         bool `yaml:"cpu"`
@@ -78,7 +81,30 @@ type Config struct {
 			PinSummary  bool     `yaml:"pin_summary"`
 			Paths       []string `yaml:"paths"`
 		} `yaml:"cursor_agent"`
+		HTTP HTTPCollector `yaml:"http"`
 	} `yaml:"collectors"`
+}
+
+// HTTPCollector probes remote websites and reports each as a virtual service.
+type HTTPCollector struct {
+	Enabled         bool         `yaml:"enabled"`
+	Timeout         Duration     `yaml:"timeout"`
+	FollowRedirects *bool        `yaml:"follow_redirects"`
+	WarnLatency     Duration     `yaml:"warn_latency"`
+	TTLSeconds      int          `yaml:"ttl_seconds"`
+	Targets         []HTTPTarget `yaml:"targets"`
+}
+
+// HTTPTarget is one website health check.
+type HTTPTarget struct {
+	ServiceKey     string            `yaml:"service_key"`
+	Name           string            `yaml:"name"`
+	URL            string            `yaml:"url"`
+	Method         string            `yaml:"method"`
+	ExpectStatus   []int             `yaml:"expect_status"`
+	ExpectContains string            `yaml:"expect_contains"`
+	Headers        map[string]string `yaml:"headers"`
+	TLSInsecure    bool              `yaml:"tls_insecure_skip_verify"`
 }
 
 var machineKeyRe = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
@@ -131,6 +157,39 @@ func (c *Config) applyDefaults() {
 	if c.Intervals.CursorAgent.Duration == 0 {
 		c.Intervals.CursorAgent.Duration = 5 * time.Minute
 	}
+	if c.Intervals.HTTP.Duration == 0 {
+		c.Intervals.HTTP.Duration = time.Minute
+	}
+	if c.Collectors.HTTP.Timeout.Duration == 0 {
+		c.Collectors.HTTP.Timeout.Duration = 10 * time.Second
+	}
+	if c.Collectors.HTTP.WarnLatency.Duration == 0 {
+		c.Collectors.HTTP.WarnLatency.Duration = 3 * time.Second
+	}
+	if c.Collectors.HTTP.TTLSeconds == 0 {
+		c.Collectors.HTTP.TTLSeconds = 180
+	}
+	for i := range c.Collectors.HTTP.Targets {
+		t := &c.Collectors.HTTP.Targets[i]
+		if t.Method == "" {
+			t.Method = "GET"
+		} else {
+			t.Method = strings.ToUpper(t.Method)
+		}
+		if len(t.ExpectStatus) == 0 {
+			t.ExpectStatus = []int{200}
+		}
+		u, err := url.Parse(t.URL)
+		if err != nil {
+			continue
+		}
+		if t.Name == "" {
+			t.Name = u.Hostname()
+		}
+		if t.ServiceKey == "" && u.Hostname() != "" {
+			t.ServiceKey = "site-" + strings.ReplaceAll(strings.ToLower(u.Hostname()), ".", "-")
+		}
+	}
 	if len(c.Collectors.Systemd.Include) == 0 {
 		c.Collectors.Systemd.Include = []string{
 			"board-server.service",
@@ -169,7 +228,34 @@ func (c *Config) validate() error {
 	if os.Getenv(c.Server.MachineTokenEnv) == "" {
 		return fmt.Errorf("environment variable %s (machine token) is empty", c.Server.MachineTokenEnv)
 	}
+	if c.Collectors.HTTP.Enabled {
+		seen := map[string]struct{}{}
+		for i, t := range c.Collectors.HTTP.Targets {
+			if t.URL == "" {
+				return fmt.Errorf("collectors.http.targets[%d].url is required", i)
+			}
+			u, err := url.Parse(t.URL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return fmt.Errorf("collectors.http.targets[%d].url must be an http(s) URL", i)
+			}
+			if !machineKeyRe.MatchString(t.ServiceKey) {
+				return fmt.Errorf("collectors.http.targets[%d].service_key must match [a-z0-9._-]{1,64}", i)
+			}
+			if _, dup := seen[t.ServiceKey]; dup {
+				return fmt.Errorf("collectors.http.targets[%d].service_key %q is duplicated", i, t.ServiceKey)
+			}
+			seen[t.ServiceKey] = struct{}{}
+		}
+	}
 	return nil
+}
+
+// HTTPFollowRedirects is true unless explicitly disabled.
+func (c *Config) HTTPFollowRedirects() bool {
+	if c.Collectors.HTTP.FollowRedirects == nil {
+		return true
+	}
+	return *c.Collectors.HTTP.FollowRedirects
 }
 
 // Token returns the machine token from the configured environment variable.

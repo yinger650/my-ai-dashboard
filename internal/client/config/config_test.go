@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const sample = `version: 1
@@ -46,6 +47,103 @@ func TestLoadAndValidate(t *testing.T) {
 	}
 	if c.Token() != "abp_m_secret" {
 		t.Errorf("token = %q", c.Token())
+	}
+}
+
+func TestLoadHTTPTargets(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	src := `version: 1
+server:
+  url: "https://board.yinger650.com"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "aliyun-web"
+collectors:
+  http:
+    enabled: true
+    targets:
+      - url: "https://board.yinger650.com/health/live"
+        expect_status: [200]
+      - service_key: site-custom
+        name: Custom
+        url: "https://example.com/"
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_TOKEN_VAR", "abp_m_secret")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.Collectors.HTTP.Enabled {
+		t.Fatal("http collector should be enabled")
+	}
+	if c.Intervals.HTTP.Duration != time.Minute {
+		t.Errorf("http interval default = %v", c.Intervals.HTTP.Duration)
+	}
+	if len(c.Collectors.HTTP.Targets) != 2 {
+		t.Fatalf("targets = %d", len(c.Collectors.HTTP.Targets))
+	}
+	if c.Collectors.HTTP.Targets[0].ServiceKey != "site-board-yinger650-com" {
+		t.Errorf("auto service_key = %q", c.Collectors.HTTP.Targets[0].ServiceKey)
+	}
+	if c.Collectors.HTTP.Targets[0].Name != "board.yinger650.com" {
+		t.Errorf("auto name = %q", c.Collectors.HTTP.Targets[0].Name)
+	}
+	if c.Collectors.HTTP.Targets[1].ServiceKey != "site-custom" {
+		t.Errorf("explicit key = %q", c.Collectors.HTTP.Targets[1].ServiceKey)
+	}
+	if !c.HTTPFollowRedirects() {
+		t.Fatal("follow_redirects should default true")
+	}
+}
+
+func TestHTTPRejectsBadURLAndDuplicateKey(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	t.Setenv("TEST_TOKEN_VAR", "abp_m_secret")
+	src := `version: 1
+server:
+  url: "https://board.yinger650.com"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "aliyun-web"
+collectors:
+  http:
+    enabled: true
+    targets:
+      - service_key: site-a
+        url: "ftp://example.com"
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected invalid URL error")
+	}
+
+	src = `version: 1
+server:
+  url: "https://board.yinger650.com"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "aliyun-web"
+collectors:
+  http:
+    enabled: true
+    targets:
+      - service_key: site-a
+        url: "https://a.example/"
+      - service_key: site-a
+        url: "https://b.example/"
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected duplicate service_key error")
 	}
 }
 

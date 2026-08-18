@@ -139,6 +139,7 @@ intervals:
   ports: 1h
   systemd: 60s
   cursor_agent: 5m
+  http: 60s
 
 collectors:
   cpu: true
@@ -175,4 +176,16 @@ collectors:
     paths:
       - /root/.cursor/projects
       - /root/.cursor-server
+  http:
+    enabled: false
+    timeout: 10s
+    follow_redirects: true
+    warn_latency: 3s
+    ttl_seconds: 180
+    targets:
+      - service_key: site-board
+        name: AgentBoard
+        url: "https://board.yinger650.com/health/live"
+        method: GET
+        expect_status: [200]
 `
