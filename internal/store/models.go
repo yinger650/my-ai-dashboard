@@ -160,11 +160,27 @@ type AccessLog struct {
 
 // AdminCredentials mirrors admin_credentials.
 type AdminCredentials struct {
-	PasswordHash        string
-	TOTPSecretEncrypted *string
-	FailedAttempts      int
-	LockedUntil         *string
-	UpdatedAt           string
+	PasswordHash          string
+	TOTPSecretEncrypted   *string
+	RecoveryCodesHashJSON *string
+	FailedAttempts        int
+	LockedUntil           *string
+	UpdatedAt             string
+}
+
+// Artifact mirrors artifacts.
+type Artifact struct {
+	ID            string  `json:"id"`
+	UploadEventID string  `json:"upload_event_id"`
+	MachineID     string  `json:"machine_id"`
+	ServiceID     *string `json:"service_id"`
+	StoredName    string  `json:"stored_name"`
+	OriginalName  string  `json:"original_name"`
+	MIMEType      string  `json:"mime_type"`
+	SizeBytes     int64   `json:"size_bytes"`
+	SHA256        string  `json:"sha256"`
+	CreatedAt     string  `json:"created_at"`
+	DeletedAt     *string `json:"deleted_at,omitempty"`
 }
 
 // Session mirrors admin_sessions.

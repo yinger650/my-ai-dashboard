@@ -41,9 +41,11 @@ type Config struct {
 		MaxEvents int    `yaml:"max_events"`
 	} `yaml:"storage"`
 	Intervals struct {
-		Heartbeat Duration `yaml:"heartbeat"`
-		Metrics   Duration `yaml:"metrics"`
-		Ports     Duration `yaml:"ports"`
+		Heartbeat   Duration `yaml:"heartbeat"`
+		Metrics     Duration `yaml:"metrics"`
+		Ports       Duration `yaml:"ports"`
+		Systemd     Duration `yaml:"systemd"`
+		CursorAgent Duration `yaml:"cursor_agent"`
 	} `yaml:"intervals"`
 	Collectors struct {
 		CPU         bool `yaml:"cpu"`
@@ -63,6 +65,19 @@ type Config struct {
 		Ports struct {
 			Enabled bool `yaml:"enabled"`
 		} `yaml:"ports"`
+		Systemd struct {
+			Enabled         bool     `yaml:"enabled"`
+			IncludeAll      bool     `yaml:"include_all"`
+			Include         []string `yaml:"include"`
+			ExcludePrefixes []string `yaml:"exclude_prefixes"`
+		} `yaml:"systemd"`
+		CursorAgent struct {
+			Enabled     bool     `yaml:"enabled"`
+			ServiceKey  string   `yaml:"service_key"`
+			ServiceName string   `yaml:"service_name"`
+			PinSummary  bool     `yaml:"pin_summary"`
+			Paths       []string `yaml:"paths"`
+		} `yaml:"cursor_agent"`
 	} `yaml:"collectors"`
 }
 
@@ -109,6 +124,35 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Intervals.Ports.Duration == 0 {
 		c.Intervals.Ports.Duration = time.Hour
+	}
+	if c.Intervals.Systemd.Duration == 0 {
+		c.Intervals.Systemd.Duration = time.Minute
+	}
+	if c.Intervals.CursorAgent.Duration == 0 {
+		c.Intervals.CursorAgent.Duration = 5 * time.Minute
+	}
+	if len(c.Collectors.Systemd.Include) == 0 {
+		c.Collectors.Systemd.Include = []string{
+			"board-server.service",
+			"board-client.service",
+			"nginx.service",
+			"sshd.service",
+		}
+	}
+	if len(c.Collectors.Systemd.ExcludePrefixes) == 0 {
+		c.Collectors.Systemd.ExcludePrefixes = []string{"systemd-", "user@", "getty@", "session-"}
+	}
+	if c.Collectors.CursorAgent.ServiceKey == "" {
+		c.Collectors.CursorAgent.ServiceKey = "cursor-agent"
+	}
+	if c.Collectors.CursorAgent.ServiceName == "" {
+		c.Collectors.CursorAgent.ServiceName = "Cursor Agent"
+	}
+	if len(c.Collectors.CursorAgent.Paths) == 0 {
+		c.Collectors.CursorAgent.Paths = []string{
+			"/root/.cursor/projects",
+			"/root/.cursor-server",
+		}
 	}
 }
 

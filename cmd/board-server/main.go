@@ -150,6 +150,11 @@ func runServer() error {
 		return err
 	}
 
+	secretKey, err := auth.LoadOrCreateSecretKey(cfg.DataDir, cfg.SecretKeyEnv)
+	if err != nil {
+		return fmt.Errorf("secret key: %w", err)
+	}
+
 	log := newLogger(cfg.LogLevel)
 	st, err := openMigrated(cfg.DBPath)
 	if err != nil {
@@ -166,7 +171,7 @@ func runServer() error {
 		webFS = sub
 	}
 
-	s := server.New(cfg, st, log, webFS)
+	s := server.New(cfg, st, log, webFS, secretKey)
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           s.Router(),

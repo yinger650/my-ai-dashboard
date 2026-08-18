@@ -7,7 +7,7 @@
 - **`board-client`**：运行在被监控 Linux 机器上的 Go 采集器，读取 `/proc` 指标并上报。
 - **`web`**：React + TypeScript + Vite + Tailwind 的响应式看板前端。
 
-> 本仓库当前实现的是设计规格的**第一版可端到端运行的核心**（里程碑 M1–M5 的主链路）。
+> 本仓库当前实现的是设计规格的**第一版可端到端运行的核心**（里程碑 M1–M7 的主链路）。
 > 已完成与尚未完成的范围见文末「实现范围」。
 
 ## 架构
@@ -120,6 +120,6 @@ make test-web
 
 ## 实现范围
 
-**已实现（可端到端运行）：** SQLite + goose 迁移；管理员 Argon2id 密码 + 会话 + CSRF；Machine/Service/Token CRUD 与一次性 Token；Event 采集（heartbeat/metric/service.state/status.upsert/log.append/log.pin/run.transition）、`event_id` 幂等、Machine Token 自动创建 Service、Run 状态机与非法转换拒绝；Board / board.txt / Machine 详情 / Service 详情查询；访问日志与限流；Go 客户端真实 `/proc` 采集（CPU/内存/文件系统/磁盘 IO/网络/端口）+ SQLite spool + 批量发送/退避重试；React 响应式看板（登录、Dashboard、机器详情、服务详情、访问记录、设置）；安全 Markdown 渲染；Go + 前端单元/集成测试。
+**已实现（可端到端运行）：** SQLite + goose 迁移；管理员 Argon2id 密码 + 会话 + CSRF；TOTP（RFC 6238）与一次性恢复码；Machine/Service/Token CRUD 与一次性 Token；Event 采集（heartbeat/metric/service.state/status.upsert/log.append/log.pin/run.transition/`machine.service_snapshot`）、`event_id` 幂等、Machine Token 自动创建 Service、Run 状态机与非法转换拒绝；Artifact 上传/下载/图片预览与全局配额；Board / board.txt / Machine 详情 / Service 详情查询；访问日志与限流；Go 客户端真实 `/proc` 采集（CPU/内存/文件系统/磁盘 IO/网络/端口）+ systemd unit 快照 + Cursor Agent transcript 扫描与启发式日志总结 + SQLite spool + 批量发送/退避重试；React 响应式看板（登录、Dashboard、机器详情、服务详情含附件与「生成日志总结」、访问记录、设置含 TOTP）；安全 Markdown 渲染；Go + 前端单元/集成测试。
 
-**尚未实现（规格后续里程碑）：** TOTP/恢复码；Artifact 上传/下载/图片预览与配额；Cursor Cloud Agent 日志总结；systemd unit 追踪；Playwright E2E；Docker/Caddy 部署与备份恢复；每日字节配额落库与全部安全测试用例。这些均为设计规格中的独立里程碑（M6–M8 及安全增强），不影响当前核心链路的运行。
+**尚未实现（规格后续里程碑 M8）：** Playwright E2E；Docker/Caddy 部署与备份恢复；每日字节配额落库与全部安全测试用例。这些不影响当前 M1–M7 核心链路的运行。

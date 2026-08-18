@@ -19,6 +19,8 @@ intervals:
   heartbeat: 30s
   metrics: 30s
   ports: 1h
+  systemd: 60s
+  cursor_agent: 5m
 
 collectors:
   cpu: true
@@ -34,3 +36,24 @@ collectors:
     exclude_interfaces: ["lo", "veth*", "docker*"]
   ports:
     enabled: true
+  systemd:
+    enabled: false
+    include_all: false
+    include:
+      - board-server.service
+      - board-client.service
+      - nginx.service
+      - sshd.service
+    exclude_prefixes:
+      - systemd-
+      - user@
+      - getty@
+      - session-
+  cursor_agent:
+    enabled: false
+    service_key: cursor-agent
+    service_name: Cursor Agent
+    pin_summary: true
+    paths:
+      - /root/.cursor/projects
+      - /root/.cursor-server

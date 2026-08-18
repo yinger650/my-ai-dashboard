@@ -58,4 +58,11 @@ func TestValidators(t *testing.T) {
 	if !IsTerminal("failed") || IsTerminal("running") {
 		t.Error("IsTerminal incorrect")
 	}
+	if !ValidServiceKey("nginx.service") || ValidServiceKey("user@1000.service") || ValidServiceKey("BAD KEY") {
+		t.Error("ValidServiceKey incorrect")
+	}
+	st, sum, sev := UnitProjection("failed", "failed", "sshd")
+	if st != "failed" || sev != "error" || sum == "" {
+		t.Errorf("UnitProjection failed: %s %s %s", st, sum, sev)
+	}
 }

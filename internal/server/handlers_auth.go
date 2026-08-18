@@ -55,17 +55,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	ok, err := auth.VerifyPassword(req.Password, creds.PasswordHash)
 	if err != nil || !ok {
-		attempts := creds.FailedAttempts + 1
-		var lockedUntil *string
-		if attempts >= 5 {
-			t := shared.FormatTime(time.Now().UTC().Add(15 * time.Minute))
-			lockedUntil = &t
-			attempts = 0
-		}
-		_ = s.st.SetFailedAttempts(r.Context(), attempts, lockedUntil)
-		s.markAbnormal(r, "unauthorized", "bad credentials")
-		api.WriteError(w, http.StatusUnauthorized, api.CodeUnauthorized, "unauthorized", rid)
+		s.failLogin(w, r, rid, creds.FailedAttempts)
 		return
+	}
+
+	if creds.TOTPSecretEncrypted != nil && *creds.TOTPSecretEncrypted != "" {
+		if req.TOTPCode == "" {
+			api.WriteError(w, http.StatusUnauthorized, api.CodeTOTPRequired, "totp_required", rid)
+			return
+		}
+		if !s.verifyTOTPOrRecovery(r, creds, req.TOTPCode) {
+			s.failLogin(w, r, rid, creds.FailedAttempts)
+			return
+		}
 	}
 
 	// Reset failed attempts on success.
@@ -138,9 +140,13 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
+	enabled := false
+	if creds, err := s.st.GetAdminCredentials(r.Context()); err == nil {
+		enabled = totpEnabled(creds)
+	}
 	sess, ok := s.loadSession(r)
 	if !ok {
-		api.WriteData(w, rid, map[string]any{"authenticated": false, "totp_enabled": false}, nil)
+		api.WriteData(w, rid, map[string]any{"authenticated": false, "totp_enabled": enabled}, nil)
 		return
 	}
 	// Issue a fresh CSRF token bound to this session.
@@ -156,7 +162,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	api.WriteData(w, rid, map[string]any{
 		"authenticated": true,
 		"expires_at":    sess.ExpiresAt,
-		"totp_enabled":  false,
+		"totp_enabled":  enabled,
 		"csrf_token":    csrfTok,
 	}, nil)
 }
