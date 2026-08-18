@@ -41,6 +41,7 @@ const (
 	CodeInternalError     = "internal_error"
 	CodeNotReady          = "not_ready"
 	CodeUnsupportedEvent  = "unsupported_event_type"
+	CodeTOTPRequired      = "totp_required"
 )
 
 // WriteJSON writes v as JSON with the given status code.

@@ -205,6 +205,17 @@ func (s *Store) projectTx(ctx context.Context, tx *sql.Tx, env *event.Envelope, 
 		if cn.Severity != "" {
 			severity = cn.Severity
 		}
+
+	case event.TypeServiceSnapshot:
+		var snap event.ServiceSnapshot
+		if err := json.Unmarshal(env.Payload, &snap); err != nil {
+			return rejected("validation_failed", "invalid machine.service_snapshot payload", true), nil
+		}
+		if errRes, err := s.projectServiceSnapshotTx(ctx, tx, env, auth, receivedAt, &snap); err != nil {
+			return IngestResult{}, err
+		} else if errRes.Status == "rejected" {
+			return errRes, nil
+		}
 	}
 
 	// Insert the immutable event row.
@@ -354,6 +365,58 @@ func (s *Store) upsertRunTx(ctx context.Context, tx *sql.Tx, serviceID, runKey s
 		return "", IngestResult{}, err
 	}
 	return id, IngestResult{Status: "accepted"}, nil
+}
+
+func (s *Store) projectServiceSnapshotTx(ctx context.Context, tx *sql.Tx, env *event.Envelope, auth IngestAuth, receivedAt string, snap *event.ServiceSnapshot) (IngestResult, error) {
+	units := snap.Units
+	if len(units) == 0 {
+		units = snap.Services
+	}
+	if len(units) > 200 {
+		return rejected("validation_failed", "snapshot units must be <= 200", true), nil
+	}
+	now := shared.FormatTime(shared.NowUTC())
+	for _, u := range units {
+		key := u.Unit
+		if key == "" {
+			continue
+		}
+		if !event.ValidServiceKey(key) {
+			continue
+		}
+		state, summary, sev := event.UnitProjection(u.Active, u.Sub, "")
+		name := u.Name
+		if name == "" {
+			name = u.Description
+		}
+		if name == "" {
+			name = key
+		}
+
+		var sid string
+		err := tx.QueryRowContext(ctx, `SELECT id FROM services WHERE machine_id = ? AND service_key = ? AND deleted_at IS NULL`, auth.MachineID, key).Scan(&sid)
+		if errors.Is(err, sql.ErrNoRows) {
+			if !auth.AutoCreateServices {
+				continue
+			}
+			sid = shared.NewID()
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO services (id, machine_id, service_key, name, type, current_state, state_summary, severity, enabled, metadata_json, last_seen_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, 'daemon', ?, ?, ?, 1, '{}', ?, ?, ?)`,
+				sid, auth.MachineID, key, name, state, summary, sev, env.OccurredAt, now, now); err != nil {
+				return IngestResult{}, err
+			}
+			continue
+		}
+		if err != nil {
+			return IngestResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE services SET current_state = ?, state_summary = ?, severity = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`,
+			state, summary, sev, env.OccurredAt, receivedAt, sid); err != nil {
+			return IngestResult{}, err
+		}
+	}
+	return IngestResult{Status: "accepted"}, nil
 }
 
 func (s *Store) updateMachineFromHeartbeatTx(ctx context.Context, tx *sql.Tx, machineID string, hb *event.Heartbeat, env *event.Envelope) error {

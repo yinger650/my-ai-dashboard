@@ -16,17 +16,18 @@ import (
 
 // Server holds shared dependencies for HTTP handlers.
 type Server struct {
-	cfg     *config.Config
-	st      *store.Store
-	log     *slog.Logger
-	limiter *rateLimiter
-	webFS   fs.FS // optional embedded frontend (may be nil in dev)
+	cfg       *config.Config
+	st        *store.Store
+	log       *slog.Logger
+	limiter   *rateLimiter
+	webFS     fs.FS // optional embedded frontend (may be nil in dev)
+	secretKey []byte
 }
 
 // New constructs a Server. webFS may be nil when the frontend is served
-// externally (e.g. Vite dev server).
-func New(cfg *config.Config, st *store.Store, log *slog.Logger, webFS fs.FS) *Server {
-	return &Server{cfg: cfg, st: st, log: log, limiter: newRateLimiter(), webFS: webFS}
+// externally (e.g. Vite dev server). secretKey is a 32-byte AES key used for TOTP.
+func New(cfg *config.Config, st *store.Store, log *slog.Logger, webFS fs.FS, secretKey []byte) *Server {
+	return &Server{cfg: cfg, st: st, log: log, limiter: newRateLimiter(), webFS: webFS, secretKey: secretKey}
 }
 
 // Router builds the chi router with the full middleware chain.
@@ -49,6 +50,7 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.mwTokenAuth)
 		r.Get("/ping", s.handlePing)
 		r.Post("/events", s.handleIngestEvents)
+		r.Post("/artifacts", s.handleIngestArtifact)
 	})
 
 	// Admin auth.
@@ -73,10 +75,13 @@ func (s *Server) Router() http.Handler {
 			r.Get("/services/{id}/statuses", s.handleServiceStatuses)
 			r.Get("/services/{id}/logs", s.handleServiceLogs)
 			r.Get("/services/{id}/runs", s.handleServiceRuns)
+			r.Get("/services/{id}/artifacts", s.handleListArtifacts)
+			r.Get("/artifacts/{id}/content", s.handleArtifactContent)
 			r.Get("/admin/access-logs", s.handleAccessLogs)
 			r.Get("/admin/settings", s.handleGetSettings)
 			r.Get("/admin/tokens", s.handleListTokens)
 			r.Get("/admin/machines", s.handleListMachinesAdmin)
+			r.Get("/admin/totp", s.handleTOTPStatus)
 
 			// Mutations require CSRF.
 			r.Group(func(r chi.Router) {
@@ -92,6 +97,13 @@ func (s *Server) Router() http.Handler {
 				r.Delete("/admin/tokens/{id}", s.handleRevokeToken)
 				r.Patch("/admin/settings", s.handlePatchSettings)
 				r.Post("/admin/maintenance/run", s.handleMaintenanceRun)
+				r.Post("/admin/totp/setup", s.handleTOTPSetup)
+				r.Post("/admin/totp/confirm", s.handleTOTPConfirm)
+				r.Post("/admin/totp/disable", s.handleTOTPDisable)
+				r.Post("/admin/totp/recovery", s.handleTOTPRecovery)
+				r.Post("/services/{id}/artifacts", s.handleUploadArtifact)
+				r.Delete("/artifacts/{id}", s.handleDeleteArtifact)
+				r.Post("/services/{id}/summarize", s.handleSummarizeLogs)
 			})
 		})
 	})

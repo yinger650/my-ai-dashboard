@@ -2,7 +2,10 @@
 // typed payloads and validation shared by board-server and board-client.
 package event
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"regexp"
+)
 
 // Event types (spec 11.2).
 const (
@@ -144,6 +147,57 @@ type CollectorNotice struct {
 	Code     string         `json:"code"`
 	Markdown string         `json:"markdown"`
 	Metadata map[string]any `json:"metadata"`
+}
+
+// SnapshotUnit is one systemd (or similar) unit in a machine.service_snapshot.
+type SnapshotUnit struct {
+	Unit        string `json:"unit"`
+	Load        string `json:"load,omitempty"`
+	Active      string `json:"active"`
+	Sub         string `json:"sub,omitempty"`
+	Description string `json:"description,omitempty"`
+	Name        string `json:"name,omitempty"`
+}
+
+// ServiceSnapshot is the payload for machine.service_snapshot.
+type ServiceSnapshot struct {
+	Units    []SnapshotUnit `json:"units"`
+	Services []SnapshotUnit `json:"services"`
+}
+
+var serviceKeyRe = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
+
+// ValidServiceKey reports whether s is a legal service_key / unit name.
+func ValidServiceKey(s string) bool {
+	return serviceKeyRe.MatchString(s)
+}
+
+// UnitProjection maps systemd ActiveState/SubState to board state fields.
+func UnitProjection(active, sub, description string) (state, summary, severity string) {
+	summary = active
+	if sub != "" {
+		summary = active + "/" + sub
+	}
+	if description != "" {
+		summary = description + " (" + summary + ")"
+	}
+	switch active {
+	case "active":
+		return "running", summary, "normal"
+	case "failed":
+		return "failed", summary, "error"
+	case "inactive":
+		return "stopped", summary, "unknown"
+	case "activating":
+		return "starting", summary, "info"
+	case "deactivating":
+		return "stopping", summary, "info"
+	default:
+		if active == "" {
+			active = "unknown"
+		}
+		return "unknown", summary, "unknown"
+	}
 }
 
 // ValidSeverity reports whether s is an allowed severity.
