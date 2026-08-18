@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"agentboard/internal/api"
 )
@@ -36,6 +37,30 @@ func (s *Server) settingString(r *http.Request, key, def string) string {
 	return out
 }
 
+func (s *Server) settingInt(r *http.Request, key string, def int) int {
+	v, err := s.st.GetSetting(r.Context(), key)
+	if err != nil {
+		return def
+	}
+	var n float64
+	if err := json.Unmarshal([]byte(v), &n); err != nil {
+		return def
+	}
+	return int(n)
+}
+
+func (s *Server) settingJSON(r *http.Request, key string) any {
+	v, err := s.st.GetSetting(r.Context(), key)
+	if err != nil {
+		return nil
+	}
+	var out any
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
 func (s *Server) mergedSettings(ctx context.Context) (map[string]any, error) {
 	out := defaultSettings()
 	stored, err := s.st.AllSettings(ctx)
@@ -58,6 +83,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
+	public := strings.TrimRight(s.cfg.PublicURL, "/")
+	settings["public_url"] = public
+	settings["board_txt_url"] = public + "/api/v1/board.txt"
+	settings["ingest_url"] = public + "/ingest/v1/events"
 	api.WriteData(w, rid, settings, nil)
 }
 
@@ -65,6 +94,7 @@ var allowedSettingKeys = map[string]bool{
 	"board_title": true, "timezone": true, "poll_interval_seconds": true, "allow_inline_images": true,
 	"cpu_warn": true, "cpu_err": true, "mem_warn": true, "mem_err": true, "disk_warn": true, "disk_err": true,
 	"raw_metric_retention_days": true, "event_retention_days": true, "artifact_quota_bytes": true,
+	"board_layout": true,
 }
 
 func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {

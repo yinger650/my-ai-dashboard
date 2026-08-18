@@ -39,6 +39,33 @@ body {
   border-radius: 14px;
 }
 
+.log-pane {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+.react-grid-item {
+  transition: transform 180ms ease, width 180ms ease, height 180ms ease;
+}
+
+.react-grid-item.react-grid-placeholder {
+  background: #6366f1;
+  border-radius: 12px;
+  opacity: 0.18;
+}
+
+.react-grid-item > .react-resizable-handle::after {
+  border-color: #818cf8;
+}
+
+.react-grid-item > .react-resizable-handle {
+  z-index: 5;
+}
+
+.react-grid-item > div {
+  height: 100%;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
