@@ -13,7 +13,9 @@ RUN apt-get update \
 
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz \
     && tar -C /usr/local -xzf /tmp/go.tgz \
-    && rm /tmp/go.tgz
+    && rm /tmp/go.tgz \
+    && ln -sf /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
 ENV PATH="/usr/local/go/bin:/root/go/bin:${PATH}"
 ENV GOTOOLCHAIN=local

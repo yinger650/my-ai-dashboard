@@ -1,0 +1,11 @@
+# Keep this next to web/package.json. A repo-root pnpm-workspace.yaml makes
+# `pnpm --dir web install` treat /workspace as an empty workspace, print
+# "No projects found", skip node_modules, and then fail at `tsc` / `vite`.
+packages:
+  - '.'
+# pnpm 10.26+ / 11: allow esbuild's install script (vite depends on it).
+allowBuilds:
+  esbuild: true
+# pnpm 10.22 (current cloud-agent corepack default) still reads this key.
+onlyBuiltDependencies:
+  - esbuild
