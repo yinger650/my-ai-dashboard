@@ -1,7 +1,7 @@
 # AgentBoard Personal (`abp`)
 
 面向个人用户的服务器、软件服务与 AI Agent 统一状态看板。本仓库实现自
-[《AgentBoard Personal 设计规格 v1.0》](docs/)，包含：
+[《AgentBoard Personal 设计规格 v1.0》](docs/agentboard-personal-design-spec-v1.md)，包含：
 
 - **`board-server`**：单个 Go 进程，提供采集 API、管理后台 API、前端静态资源和后台清理。
 - **`board-client`**：运行在被监控 Linux 机器上的 Go 采集器，读取 `/proc` 指标并上报。
