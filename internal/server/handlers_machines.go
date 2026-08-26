@@ -114,7 +114,8 @@ func (s *Server) handleMachineLogs(w http.ResponseWriter, r *http.Request) {
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil {
 		limit = n
 	}
-	logs, err := s.st.ListMachineLogs(r.Context(), id, cursor, limit)
+	exclude := r.URL.Query()["exclude"]
+	logs, err := s.st.ListMachineLogsExcluding(r.Context(), id, cursor, limit, exclude)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return

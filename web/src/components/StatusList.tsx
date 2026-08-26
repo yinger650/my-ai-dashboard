@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { BoardService, StatusItem } from "../types";
+import { compactCardServices } from "../lib/board-card";
 import { SevDot } from "./Severity";
 import { cn } from "../lib/utils";
 
@@ -18,13 +19,15 @@ export function StatusList({
   services,
   statuses,
   collapsedCount = 6,
+  compact = false,
 }: {
   services: BoardService[];
   statuses: StatusItem[];
   collapsedCount?: number;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const items = buildRows(services, statuses);
+  const items = buildRows(compact ? compactCardServices(services) : services, compact ? [] : statuses);
   if (items.length === 0) {
     return <div className="py-1 text-xs text-slate-500">暂无状态</div>;
   }

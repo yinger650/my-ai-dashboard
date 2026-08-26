@@ -36,7 +36,7 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 		svcs, _ := s.st.ListServicesByMachine(ctx, m.ID)
 		statuses, _ := s.st.ListStatusesByMachine(ctx, m.ID)
 		pinned, _ := s.st.ListPinnedLogsByMachine(ctx, m.ID)
-		recent, _ := s.st.ListMachineLogs(ctx, m.ID, "", 20)
+		recent, _ := s.st.ListMachineLogsExcluding(ctx, m.ID, "", 20, []string{"cron"})
 
 		if svcs == nil {
 			svcs = []*store.Service{}
@@ -82,8 +82,8 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 			"service_counts":    counts,
 			"services":          services,
 			"statuses":          statuses,
-			"pinned_logs":       pinned,
-			"recent_logs":       recent,
+			"pinned_logs":       cardPins(pinned),
+			"recent_logs":       cardRecentLogs(recent, 20),
 		})
 	}
 	return out, nil
@@ -166,6 +166,39 @@ func (s *Server) handleBoardTxt(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(b.String()))
+}
+
+func cardRecentLogs(logs []store.LogEntry, limit int) []store.LogEntry {
+	if limit <= 0 {
+		limit = 20
+	}
+	out := make([]store.LogEntry, 0, limit)
+	for _, l := range logs {
+		if l.Source == "cron" || l.ServiceKey == "cron" {
+			continue
+		}
+		out = append(out, l)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func cardPins(pins []store.PinnedLog) []store.PinnedLog {
+	keep := map[string]bool{
+		"host-listen": true,
+		"nginx":       true,
+		"docker":      true,
+		"cron":        true,
+	}
+	out := make([]store.PinnedLog, 0, len(pins))
+	for _, p := range pins {
+		if keep[p.ServiceKey] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func statusValueText(st store.CurrentStatus) string {

@@ -52,6 +52,8 @@ type State struct {
 	NginxHadProxies  bool              `json:"nginx_had_proxies"`
 	UnitActive       map[string]string `json:"unit_active"`
 	CronSeen         map[string]bool   `json:"cron_seen"`
+	CronOffsets      map[string]int64  `json:"cron_offsets"`
+	CronPrimed       bool              `json:"cron_primed"`
 }
 
 // NewState returns an empty projection state.
@@ -61,6 +63,7 @@ func NewState() *State {
 		DockerContainers: map[string]string{},
 		UnitActive:       map[string]string{},
 		CronSeen:         map[string]bool{},
+		CronOffsets:      map[string]int64{},
 	}
 }
 
@@ -76,6 +79,8 @@ func Project(snap hostsnap.Snapshot, prev *State, meta Meta) ([]Event, *State) {
 		NginxHadProxies:  prev.NginxHadProxies,
 		UnitActive:       copyMap(prev.UnitActive),
 		CronSeen:         copyBoolMap(prev.CronSeen),
+		CronOffsets:      copyInt64Map(prev.CronOffsets),
+		CronPrimed:       prev.CronPrimed,
 	}
 	var evs []Event
 	evs = append(evs, machineEvents(snap, meta)...)
@@ -99,7 +104,7 @@ func machineEvents(snap hostsnap.Snapshot, meta Meta) []Event {
 			Hostname:                 meta.Hostname,
 			OS:                       "linux",
 			Arch:                     arch,
-			CollectorVersion:         "1.3.0",
+			CollectorVersion:         "1.3.1",
 			HeartbeatIntervalSeconds: meta.HeartbeatSeconds,
 			UptimeSeconds:            meta.UptimeSeconds,
 		}},
@@ -245,7 +250,7 @@ func projectUnits(snap hostsnap.Snapshot, st *State) []Event {
 	var evs []Event
 	for _, u := range snap.Units {
 		key := normalizeUnitKey(u.Unit)
-		if key == "" || key == SelfKey || key == CronKey {
+		if key == "" || dedicatedUnitKey(key) {
 			continue
 		}
 		state, summary, sev := event.UnitProjection(u.Active, u.Sub, u.Description)
@@ -283,6 +288,14 @@ func normalizeUnitKey(unit string) string {
 		return ""
 	}
 	return key
+}
+
+func dedicatedUnitKey(key string) bool {
+	switch key {
+	case SelfKey, CronKey, NginxKey, DockerKey, InspectKey, ListenKey:
+		return true
+	}
+	return false
 }
 
 func projectDocker(snap hostsnap.Snapshot, prev, next *State) []Event {
@@ -377,8 +390,15 @@ func projectCron(snap hostsnap.Snapshot, st *State) []Event {
 	if snap.Cron == nil {
 		return nil
 	}
+	jobs := make([]hostsnap.CronJob, 0, len(snap.Cron.Jobs))
+	for _, j := range snap.Cron.Jobs {
+		if collector.IsCronNoise(j.Command) {
+			continue
+		}
+		jobs = append(jobs, j)
+	}
 	var evs []Event
-	n := len(snap.Cron.Jobs)
+	n := len(jobs)
 	evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: CronKey, Payload: event.ServiceState{
 		Name: "Cron", Type: "scheduled", State: "running",
 		Summary: strconv.Itoa(n) + " 条计划", Severity: "normal",
@@ -388,10 +408,10 @@ func projectCron(snap hostsnap.Snapshot, st *State) []Event {
 			{Key: "jobs", Label: "计划数", Value: rawInt(int64(n)), ValueType: "number", Severity: "normal", DisplayFormat: "number", SortOrder: 10},
 		},
 	}})
-	evs = append(evs, pinIfChanged(st, CronKey, "Cron", "scheduled", renderCronTable(snap.Cron.Jobs), "info")...)
+	evs = append(evs, pinIfChanged(st, CronKey, "Cron", "scheduled", renderCronTable(jobs), "info")...)
 
 	for _, ex := range snap.Cron.Executions {
-		if st.CronSeen[ex.Key] {
+		if collector.IsCronNoise(ex.Command) || st.CronSeen[ex.Key] {
 			continue
 		}
 		st.CronSeen[ex.Key] = true
@@ -588,6 +608,13 @@ func copyMap(in map[string]string) map[string]string {
 }
 func copyBoolMap(in map[string]bool) map[string]bool {
 	out := map[string]bool{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+func copyInt64Map(in map[string]int64) map[string]int64 {
+	out := map[string]int64{}
 	for k, v := range in {
 		out[k] = v
 	}

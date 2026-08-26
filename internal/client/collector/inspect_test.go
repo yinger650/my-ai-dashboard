@@ -1,10 +1,12 @@
 package collector
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"agentboard/internal/client/hostsnap"
 )
@@ -97,6 +99,82 @@ server {
 	eff := EffectiveProxies(px, []hostsnap.Port{{Port: 443, Process: "nginx"}})
 	if len(eff) != 1 || eff[0].ServerName != "board.yinger650.com" || eff[0].Upstream != "127.0.0.1:8090" {
 		t.Fatalf("effective = %+v", eff)
+	}
+}
+
+func TestIsCronNoise(t *testing.T) {
+	if !IsCronNoise("flock -xn /tmp/stargate.lock /usr/local/qcloud/stargate/admin/start.sh") {
+		t.Fatal("qcloud stargate should be noise")
+	}
+	if !IsCronNoise("/usr/local/qcloud/tat_agent/tat_agent") {
+		t.Fatal("tat_agent should be noise")
+	}
+	if IsCronNoise("/usr/bin/backup") {
+		t.Fatal("normal job should not be noise")
+	}
+}
+
+func TestReadCronJobsHidesQcloud(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := "*/1 * * * * root flock -xn /tmp/lock /usr/local/qcloud/stargate/admin/start.sh\n0 3 * * * root /usr/bin/backup\n"
+	if err := os.WriteFile(filepath.Join(root, "etc", "crontab"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	jobs := ReadCronJobs(root, nil)
+	if len(jobs) != 1 || jobs[0].Command != "/usr/bin/backup" {
+		t.Fatalf("jobs = %+v", jobs)
+	}
+}
+
+func TestReadCronExecutionsDoesNotReplayHistory(t *testing.T) {
+	root := t.TempDir()
+	logDir := filepath.Join(root, "var", "log")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339)
+	recent := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	p := filepath.Join(logDir, "cron")
+	var body strings.Builder
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&body, "%s box CRON[%d]: (root) CMD (/usr/bin/old-%d)\n", old, i, i)
+	}
+	fmt.Fprintf(&body, "%s box CRON[99]: (root) CMD (flock -xn /tmp/x /usr/local/qcloud/stargate/admin/start.sh)\n", recent)
+	fmt.Fprintf(&body, "%s box CRON[100]: (root) CMD (/usr/bin/backup)\n", recent)
+	if err := os.WriteFile(p, []byte(body.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tail := &CronTail{}
+	first := ReadCronExecutions(root, []string{"/var/log/cron"}, nil, tail)
+	if len(first) != 1 || !strings.Contains(first[0].Command, "backup") {
+		t.Fatalf("first = %+v", first)
+	}
+	if !tail.Primed {
+		t.Fatal("expected primed after first read")
+	}
+
+	second := ReadCronExecutions(root, []string{"/var/log/cron"}, nil, tail)
+	if len(second) != 0 {
+		t.Fatalf("second replay = %+v", second)
+	}
+
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := time.Now().Add(-30 * time.Second).UTC().Format(time.RFC3339)
+	if _, err := fmt.Fprintf(f, "%s box CRON[101]: (root) CMD (/usr/bin/tick)\n", newer); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	third := ReadCronExecutions(root, []string{"/var/log/cron"}, nil, tail)
+	if len(third) != 1 || !strings.Contains(third[0].Command, "tick") {
+		t.Fatalf("incremental = %+v", third)
 	}
 }
 

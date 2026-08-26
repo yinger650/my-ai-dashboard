@@ -243,3 +243,35 @@ func TestListMachineLogsPagination(t *testing.T) {
 		t.Fatalf("all logs: %v n=%d", err, len(all))
 	}
 }
+
+func TestListMachineLogsExcludingCron(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	m := &Machine{MachineKey: "cronbox", Name: "Cron Box", Kind: "vm", Enabled: true, AutoCreateServices: true}
+	if err := st.CreateMachine(ctx, m); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	auth := IngestAuth{MachineID: m.ID, AutoCreateServices: true}
+	received := shared.FormatTime(shared.NowUTC())
+	for _, key := range []string{"cron", "nginx"} {
+		if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeServiceState, key, "", event.ServiceState{
+			Name: key, Type: "daemon", State: "running", Severity: "normal",
+		}), auth, received); err != nil || r.Status != "accepted" {
+			t.Fatalf("state %s: %v %+v", key, err, r)
+		}
+	}
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeLogAppend, "cron", "", event.LogPayload{
+		Markdown: "cron noise", Severity: "info", Source: "cron",
+	}), auth, received); err != nil || r.Status != "accepted" {
+		t.Fatalf("cron log: %v %+v", err, r)
+	}
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeLogAppend, "nginx", "", event.LogPayload{
+		Markdown: "nginx restart", Severity: "info", Source: "nginx",
+	}), auth, received); err != nil || r.Status != "accepted" {
+		t.Fatalf("nginx log: %v %+v", err, r)
+	}
+	kept, err := st.ListMachineLogsExcluding(ctx, m.ID, "", 20, []string{"cron"})
+	if err != nil || len(kept) != 1 || kept[0].Markdown != "nginx restart" {
+		t.Fatalf("exclude cron: %v %+v", err, kept)
+	}
+}

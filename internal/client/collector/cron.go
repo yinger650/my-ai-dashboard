@@ -3,6 +3,8 @@ package collector
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,9 +13,60 @@ import (
 	"agentboard/internal/client/hostsnap"
 )
 
-// CronTail remembers which execution keys have already been reported.
+const (
+	// CronLookback is the max age of a cron execution we will report.
+	CronLookback = 15 * time.Minute
+	// CronMaxPerRound caps Run/log events per collect cycle.
+	CronMaxPerRound = 15
+	// CronTailBytes is how far back we read a log the first time we see it.
+	CronTailBytes = 64 * 1024
+	// CronSeenMax is when we drop the in-memory dedup set (offsets still stand).
+	CronSeenMax = 4000
+)
+
+// CronTail remembers which execution keys have already been reported and the
+// byte offset of each cron log we have already consumed.
 type CronTail struct {
-	Seen map[string]bool `json:"seen"`
+	Seen    map[string]bool  `json:"seen"`
+	Offsets map[string]int64 `json:"offsets"`
+	Primed  bool             `json:"primed"`
+}
+
+func (t *CronTail) ensure() {
+	if t.Seen == nil {
+		t.Seen = map[string]bool{}
+	}
+	if t.Offsets == nil {
+		t.Offsets = map[string]int64{}
+	}
+}
+
+func (t *CronTail) pruneSeen() {
+	if len(t.Seen) < CronSeenMax {
+		return
+	}
+	t.Seen = map[string]bool{}
+}
+
+// IsCronNoise reports cloud-agent / vendor housekeeping jobs that should not
+// appear on the board (Tencent Cloud stargate, TAT, etc.).
+func IsCronNoise(command string) bool {
+	c := strings.ToLower(command)
+	for _, n := range []string{
+		"/usr/local/qcloud/",
+		"/usr/local/qcloud",
+		"stargate",
+		"tat_agent",
+		"tat-agent",
+		"yunjing",
+		"barad_agent",
+		"barad",
+	} {
+		if strings.Contains(c, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // ReadCronJobs reads enabled crontab lines from allowlisted paths under root.
@@ -30,6 +83,9 @@ func ReadCronJobs(root string, extra []string) []hostsnap.CronJob {
 		}
 		system := isSystemCrontab(p)
 		for _, j := range ParseCrontab(string(data), system) {
+			if IsCronNoise(j.Command) {
+				continue
+			}
 			key := j.Schedule + "\t" + j.User + "\t" + j.Command
 			if _, ok := seen[key]; ok {
 				continue
@@ -192,38 +248,118 @@ func cronExecKey(line, user, cmd string) string {
 }
 
 func inferCronLogTime(line string) string {
-	// journalctl short-iso: 2026-08-26T03:20:01+08:00 hostname CRON...
 	fields := strings.Fields(line)
-	if len(fields) > 0 {
-		if _, err := time.Parse(time.RFC3339, fields[0]); err == nil {
-			return fields[0]
+	if len(fields) == 0 {
+		return ""
+	}
+	if t, err := time.Parse(time.RFC3339, fields[0]); err == nil {
+		return t.UTC().Format(time.RFC3339)
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05-0700", fields[0]); err == nil {
+		return t.UTC().Format(time.RFC3339)
+	}
+	if len(fields) >= 3 {
+		raw := strings.Join(fields[0:3], " ")
+		year := time.Now().Year()
+		if t, err := time.ParseInLocation("2006 Jan 2 15:04:05", fmt.Sprintf("%d %s", year, raw), time.Local); err == nil {
+			if t.After(time.Now().Add(24 * time.Hour)) {
+				t = t.AddDate(-1, 0, 0)
+			}
+			return t.UTC().Format(time.RFC3339)
 		}
 	}
 	return ""
 }
 
-// ReadCronExecutions reads incremental cron CMD lines from allowlisted log files
-// and optional journalctl output.
-func ReadCronExecutions(root string, logPaths []string, run Commander, tail *CronTail) []hostsnap.CronExec {
-	if tail.Seen == nil {
-		tail.Seen = map[string]bool{}
+func keepCronExec(ex hostsnap.CronExec, primed bool, cutoff time.Time) bool {
+	if IsCronNoise(ex.Command) {
+		return false
 	}
+	if ex.Occurred == "" {
+		// Untimed lines are only safe after we have started tailing.
+		return primed
+	}
+	t, err := time.Parse(time.RFC3339, ex.Occurred)
+	if err != nil {
+		return primed
+	}
+	return !t.Before(cutoff)
+}
+
+func readCronFileDelta(path string, tail *CronTail) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	size := info.Size()
+	start, known := tail.Offsets[path]
+	if !known {
+		start = size - CronTailBytes
+		if start < 0 {
+			start = 0
+		}
+	} else if start > size {
+		start = 0 // rotated
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return ""
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+	tail.Offsets[path] = size
+	return string(data)
+}
+
+// ReadCronExecutions reads incremental cron CMD lines from allowlisted log files
+// and optional journalctl output. It never replays a whole historical log.
+func ReadCronExecutions(root string, logPaths []string, run Commander, tail *CronTail) []hostsnap.CronExec {
+	if tail == nil {
+		tail = &CronTail{}
+	}
+	tail.ensure()
+	tail.pruneSeen()
+
+	primed := tail.Primed
+	cutoff := time.Now().Add(-CronLookback)
 	var all []hostsnap.CronExec
 	if len(logPaths) == 0 {
 		logPaths = []string{"/var/log/cron", "/var/log/cron.log"}
 	}
+	gotFile := false
 	for _, p := range logPaths {
-		data, err := os.ReadFile(joinRoot(root, p))
-		if err != nil {
+		full := joinRoot(root, p)
+		delta := readCronFileDelta(full, tail)
+		if delta == "" {
 			continue
 		}
-		all = append(all, ParseCronLog(string(data), tail.Seen)...)
+		gotFile = true
+		all = append(all, ParseCronLog(delta, tail.Seen)...)
 	}
-	if run != nil {
-		out, err := run("journalctl", "-n", "80", "--no-pager", "-o", "short-iso", "SYSLOG_IDENTIFIER=CRON")
+	if !gotFile && run != nil {
+		since := cutoff.Format(time.RFC3339)
+		out, err := run("journalctl", "-n", "40", "--no-pager", "-o", "short-iso", "--since", since, "SYSLOG_IDENTIFIER=CRON")
 		if err == nil {
 			all = append(all, ParseCronLog(string(out), tail.Seen)...)
 		}
 	}
-	return all
+
+	var kept []hostsnap.CronExec
+	for _, ex := range all {
+		if !keepCronExec(ex, primed, cutoff) {
+			continue
+		}
+		kept = append(kept, ex)
+		if len(kept) >= CronMaxPerRound {
+			break
+		}
+	}
+	tail.Primed = true
+	return kept
 }

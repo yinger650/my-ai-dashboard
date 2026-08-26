@@ -110,6 +110,11 @@ func (r *Runner) collectAndProject() {
 		Promote:          r.cfg.Collectors.Ports.Promote,
 	}
 	evs, next := agent.Project(snap, r.proj, meta)
+	if r.cronTail != nil {
+		next.CronSeen = r.cronTail.Seen
+		next.CronOffsets = r.cronTail.Offsets
+		next.CronPrimed = r.cronTail.Primed
+	}
 	r.proj = next
 	for _, e := range evs {
 		r.enqueue(e.Type, e.ServiceKey, e.RunKey, e.Payload)
@@ -127,7 +132,7 @@ func (r *Runner) emitHeartbeatAlive() {
 		Hostname:                 r.cfg.Machine.DisplayName,
 		OS:                       "linux",
 		Arch:                     "amd64",
-		CollectorVersion:         "1.3.0",
+		CollectorVersion:         "1.3.1",
 		HeartbeatIntervalSeconds: int(r.cfg.Intervals.Heartbeat.Duration.Seconds()),
 		UptimeSeconds:            r.col.Uptime(),
 	})
@@ -165,8 +170,14 @@ func (r *Runner) loadInspectState() {
 	st := agent.NewState()
 	if json.Unmarshal(b, st) == nil {
 		r.proj = st
-		if r.cronTail != nil && st.CronSeen != nil {
-			r.cronTail.Seen = st.CronSeen
+		if r.cronTail != nil {
+			if st.CronSeen != nil {
+				r.cronTail.Seen = st.CronSeen
+			}
+			if st.CronOffsets != nil {
+				r.cronTail.Offsets = st.CronOffsets
+			}
+			r.cronTail.Primed = st.CronPrimed
 		}
 	}
 }

@@ -8,6 +8,28 @@ import (
 	"agentboard/internal/store"
 )
 
+func TestCardRecentLogsSkipCron(t *testing.T) {
+	got := cardRecentLogs([]store.LogEntry{
+		{Markdown: "cron", Source: "cron"},
+		{Markdown: "also cron", ServiceKey: "cron"},
+		{Markdown: "nginx", Source: "nginx"},
+	}, 20)
+	if len(got) != 1 || got[0].Markdown != "nginx" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestCardPinsKeepCurrentState(t *testing.T) {
+	got := cardPins([]store.PinnedLog{
+		{ServiceKey: "cursor-agent", Markdown: "agent"},
+		{ServiceKey: "nginx", Markdown: "proxy"},
+		{ServiceKey: "host-listen", Markdown: "ports"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestStatusValueText(t *testing.T) {
 	unit := "%"
 	got := statusValueText(store.CurrentStatus{ValueJSON: "12.5", Unit: &unit})

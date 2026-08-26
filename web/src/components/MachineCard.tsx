@@ -61,7 +61,7 @@ export function MachineCard({
       </div>
 
       <div className="mb-2 max-h-28 overflow-hidden">
-        <StatusList services={m.services ?? []} statuses={m.statuses ?? []} collapsedCount={5} />
+        <StatusList services={m.services ?? []} statuses={[]} collapsedCount={6} compact />
       </div>
 
       <MachineLogStream
@@ -70,6 +70,7 @@ export function MachineCard({
         pollMs={pollMs}
         initialLogs={m.recent_logs ?? []}
         initialPinned={m.pinned_logs ?? []}
+        compact
       />
 
       <footer className="mt-2 flex items-center gap-3 text-xs">

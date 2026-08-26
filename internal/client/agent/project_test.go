@@ -125,6 +125,57 @@ func TestDockerStoppedOnlyCounted(t *testing.T) {
 	}
 }
 
+func TestProjectSkipsNginxSystemdUnit(t *testing.T) {
+	snap := hostsnap.Snapshot{
+		Units: []hostsnap.Unit{{
+			Unit: "nginx.service", Active: "inactive", Sub: "dead", Description: "The nginx HTTP server",
+		}},
+		Nginx: &hostsnap.Nginx{Available: true, PID: 9, Proxies: []hostsnap.Proxy{
+			{ServerName: "board.example", Listen: "80", ListenPort: 80, Location: "/", Upstream: "127.0.0.1:8090"},
+		}},
+		Ports: []hostsnap.Port{{Protocol: "tcp", Address: "0.0.0.0", Port: 80, Process: "nginx"}},
+	}
+	evs, _ := Project(snap, NewState(), meta())
+	states := eventsOf(evs, event.TypeServiceState, NginxKey)
+	if len(states) == 0 {
+		t.Fatal("expected nginx projector state")
+	}
+	ss := states[len(states)-1].Payload.(event.ServiceState)
+	if ss.State != "running" || !contains(ss.Summary, "生效反代") {
+		t.Fatalf("systemd dead unit should not win: %+v", ss)
+	}
+}
+
+func TestProjectDropsNoisyCronExec(t *testing.T) {
+	snap := hostsnap.Snapshot{
+		Cron: &hostsnap.Cron{
+			Jobs: []hostsnap.CronJob{
+				{Schedule: "*/1 * * * *", User: "root", Command: "/usr/local/qcloud/stargate/admin/start.sh"},
+				{Schedule: "0 3 * * *", User: "root", Command: "/usr/bin/backup"},
+			},
+			Executions: []hostsnap.CronExec{
+				{Key: "n1", Occurred: "2026-08-26T03:00:00Z", User: "root", Command: "/usr/local/qcloud/stargate/admin/start.sh"},
+				{Key: "e1", Occurred: "2026-08-26T03:00:00Z", User: "root", Command: "/usr/bin/backup"},
+			},
+		},
+	}
+	evs, _ := Project(snap, NewState(), meta())
+	if n := len(eventsOf(evs, event.TypeRunTransition, CronKey)); n != 1 {
+		t.Fatalf("runs = %d", n)
+	}
+	pins := eventsOf(evs, event.TypeLogPin, CronKey)
+	if len(pins) != 1 {
+		t.Fatal("expected cron pin")
+	}
+	md := pins[0].Payload.(event.LogPayload).Markdown
+	if contains(md, "stargate") || contains(md, "qcloud") {
+		t.Fatalf("noise job leaked into pin: %s", md)
+	}
+	if !contains(md, "backup") {
+		t.Fatalf("missing real job: %s", md)
+	}
+}
+
 func TestCronJobsAndRuns(t *testing.T) {
 	snap := hostsnap.Snapshot{
 		Cron: &hostsnap.Cron{
