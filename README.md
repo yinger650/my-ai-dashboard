@@ -1,14 +1,15 @@
 # AgentBoard Personal (`abp`)
 
 面向个人用户的服务器、软件服务与 AI Agent 统一状态看板。本仓库实现自
-[《AgentBoard Personal 设计规格 v1.0》](docs/)，包含：
+[《AgentBoard Personal 设计规格 v1.1》](docs/agentboard-personal-design-spec.md)
+（[1.0 原稿](docs/archive/agentboard-personal-design-spec-v1.0.md)），包含：
 
 - **`board-server`**：单个 Go 进程，提供采集 API、管理后台 API、前端静态资源和后台清理。
 - **`board-client`**：运行在被监控 Linux 机器上的 Go 采集器，读取 `/proc` 指标并上报。
 - **`web`**：React + TypeScript + Vite + Tailwind 的响应式看板前端。
 
-> 本仓库当前实现的是设计规格的**第一版可端到端运行的核心**（里程碑 M1–M7 的主链路）。
-> 已完成与尚未完成的范围见文末「实现范围」。
+> 本仓库当前实现的是设计规格 **1.1**：1.0 的 M1–M7 主链路，加上 Agent HTTP 上报、
+> Service TTL、HTTP 探测、自由网格、卡片日志与「显示离线」。缺口见规格 §0.4 与文末「实现范围」。
 
 ## 架构
 
@@ -140,7 +141,7 @@ make test-web
 
 **已实现（可端到端运行）：** SQLite + goose 迁移；管理员 Argon2id 密码 + 会话 + CSRF；TOTP（RFC 6238）与一次性恢复码；Machine/Service/Token CRUD 与一次性 Token；Event 采集（heartbeat/metric/service.state/status.upsert/log.append/log.pin/run.transition/`machine.service_snapshot`）、`event_id` 幂等、Machine Token 自动创建 Service、Run 状态机与非法转换拒绝、**service TTL 过期投影**；Artifact 上传/下载/图片预览与全局配额；Board / board.txt / Machine 详情 / Service 详情查询；访问日志与限流；Go 客户端真实 `/proc` 采集（CPU/内存/文件系统/磁盘 IO/网络/端口）+ systemd unit 快照 + **HTTP 网站探测** + Cursor Agent transcript 扫描与启发式日志总结 + SQLite spool + 批量发送/退避重试；**Cursor/Codex/OpenClaw HTTP 上报 skill + rule**；React 响应式看板（登录、Dashboard、机器详情、服务详情含附件与「生成日志总结」、访问记录、设置含 TOTP）；安全 Markdown 渲染；Go + 前端单元/集成测试。
 
-**尚未实现（规格后续里程碑 M8）：** Playwright E2E；Docker/Caddy 部署与备份恢复；每日字节配额落库与全部安全测试用例。这些不影响当前 M1–M7 核心链路的运行。
+**尚未实现（规格 1.0 后续 / M8）：** Playwright E2E；Docker/Caddy 与备份恢复 CLI；`log_tasks` 与 Cursor Cloud Agents API 总结；指标时间桶；端口详情 API；Token 日配额；完整清理任务；改密 API。这些不影响当前 1.1 核心链路的运行。完整对照见 [设计规格 §0](docs/agentboard-personal-design-spec.md)。
 
 ## Agent 自行上报（Cursor / Codex / OpenClaw）
 
