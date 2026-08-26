@@ -27,6 +27,17 @@ func ReadNginx(roots []string, hostRoot string) *hostsnap.Nginx {
 		}
 		seen[f] = data
 	}
+	for _, extra := range collectNginxIncludes(seen, hostRoot) {
+		if _, ok := seen[extra]; ok {
+			continue
+		}
+		data, err := os.ReadFile(extra)
+		if err != nil {
+			continue
+		}
+		seen[extra] = data
+	}
+
 	// Parse each file independently; includes already expanded via directory walk.
 	upstreams := map[string]string{}
 	for _, data := range seen {
@@ -65,6 +76,76 @@ func listNginxFiles(dir, allowPrefix string) []string {
 		}
 		if strings.HasSuffix(name, ".conf") || name == "nginx.conf" {
 			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func parseNginxIncludes(src string) []string {
+	var out []string
+	for _, line := range stripNginxComments(src) {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "include" {
+			continue
+		}
+		p := strings.TrimSuffix(fields[1], ";")
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func hostJoin(root, p string) string {
+	if root == "" {
+		return p
+	}
+	return filepath.Join(root, strings.TrimPrefix(p, "/"))
+}
+
+func nginxIncludeAllowed(path, hostRoot string) bool {
+	full := path
+	if hostRoot != "" {
+		full = hostJoin(hostRoot, path)
+	}
+	allow := []string{
+		"/etc/nginx",
+		"/www/server/nginx",
+		"/www/server/panel/vhost/nginx",
+	}
+	for _, a := range allow {
+		prefix := a
+		if hostRoot != "" {
+			prefix = filepath.Join(hostRoot, a)
+		}
+		if strings.HasPrefix(full, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectNginxIncludes(seen map[string][]byte, hostRoot string) []string {
+	var out []string
+	for _, data := range seen {
+		for _, inc := range parseNginxIncludes(string(data)) {
+			if !nginxIncludeAllowed(inc, hostRoot) {
+				continue
+			}
+			pattern := inc
+			if hostRoot != "" {
+				pattern = hostJoin(hostRoot, inc)
+			}
+			matches, err := filepath.Glob(pattern)
+			if err != nil {
+				continue
+			}
+			for _, m := range matches {
+				if strings.HasSuffix(m, ".conf") || filepath.Base(m) == "nginx.conf" {
+					out = append(out, m)
+				}
+			}
 		}
 	}
 	return out

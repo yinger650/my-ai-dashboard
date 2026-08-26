@@ -178,6 +178,38 @@ func TestReadCronExecutionsDoesNotReplayHistory(t *testing.T) {
 	}
 }
 
+func TestReadNginxFollowsInclude(t *testing.T) {
+	root := t.TempDir()
+	confDir := filepath.Join(root, "www", "server", "nginx", "conf")
+	vhostDir := filepath.Join(root, "www", "server", "panel", "vhost", "nginx")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(vhostDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	main := "include /www/server/panel/vhost/nginx/*.conf;\n"
+	vhost := `
+server {
+    listen 443 ssl;
+    server_name board.example;
+    location / {
+        proxy_pass http://127.0.0.1:8090;
+    }
+}
+`
+	if err := os.WriteFile(filepath.Join(confDir, "nginx.conf"), []byte(main), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vhostDir, "board.example.conf"), []byte(vhost), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ngx := ReadNginx([]string{"/www/server/nginx/conf"}, root)
+	if !ngx.Available || len(ngx.Proxies) != 1 || ngx.Proxies[0].ServerName != "board.example" {
+		t.Fatalf("include not followed: %+v", ngx)
+	}
+}
+
 func TestReadCronJobsFromRoot(t *testing.T) {
 	root := t.TempDir()
 	etc := filepath.Join(root, "etc")

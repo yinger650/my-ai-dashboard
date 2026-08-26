@@ -57,6 +57,7 @@ collectors:
     config_paths:
       - /etc/nginx
       - /www/server/nginx/conf
+      - /www/server/panel/vhost/nginx
   systemd:
     enabled: false
     include_all: false

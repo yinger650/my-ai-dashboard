@@ -299,8 +299,14 @@ func dedicatedUnitKey(key string) bool {
 }
 
 func projectDocker(snap hostsnap.Snapshot, prev, next *State) []Event {
-	if snap.Docker == nil || !snap.Docker.Available {
+	if snap.Docker == nil {
 		return nil
+	}
+	if !snap.Docker.Available {
+		return []Event{{Type: event.TypeServiceState, ServiceKey: DockerKey, Payload: event.ServiceState{
+			Name: "Docker", Type: "daemon", State: "unknown",
+			Summary: "未安装或未运行", Severity: "unknown",
+		}}}
 	}
 	running, stopped := 0, 0
 	cur := map[string]string{}

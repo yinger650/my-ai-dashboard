@@ -146,6 +146,19 @@ func TestProjectSkipsNginxSystemdUnit(t *testing.T) {
 	}
 }
 
+func TestProjectDockerUnavailable(t *testing.T) {
+	snap := hostsnap.Snapshot{Docker: &hostsnap.Docker{Available: false}}
+	evs, _ := Project(snap, NewState(), meta())
+	states := eventsOf(evs, event.TypeServiceState, DockerKey)
+	if len(states) != 1 {
+		t.Fatalf("states = %d", len(states))
+	}
+	ss := states[0].Payload.(event.ServiceState)
+	if ss.State != "unknown" || !contains(ss.Summary, "未安装") {
+		t.Fatalf("%+v", ss)
+	}
+}
+
 func TestProjectDropsNoisyCronExec(t *testing.T) {
 	snap := hostsnap.Snapshot{
 		Cron: &hostsnap.Cron{
