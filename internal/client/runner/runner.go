@@ -14,8 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"agentboard/internal/client/agent"
 	"agentboard/internal/client/collector"
 	"agentboard/internal/client/config"
+	"agentboard/internal/client/hostsnap"
 	"agentboard/internal/client/sender"
 	"agentboard/internal/client/spool"
 	"agentboard/internal/event"
@@ -33,23 +35,33 @@ type Runner struct {
 	snd *sender.Sender
 	log *slog.Logger
 
-	bootID   string
-	seq      int64
-	seenPath string
-	httpPrev map[string]bool
+	bootID    string
+	seq       int64
+	seenPath  string
+	statePath string
+	httpPrev  map[string]bool
+	proj      *agent.State
+	cronTail  *collector.CronTail
+	lastSnap  *hostsnap.Snapshot
+	hostRoot  string
+	runCmd    collector.Commander
 }
 
 // New constructs a Runner.
 func New(cfg *config.Config, sp *spool.Spool, log *slog.Logger) *Runner {
+	dir := filepath.Dir(cfg.Storage.SpoolPath)
 	return &Runner{
-		cfg:      cfg,
-		sp:       sp,
-		col:      collector.New(),
-		snd:      sender.New(cfg.Server.URL, cfg.Token(), cfg.Server.Timeout.Duration),
-		log:      log,
-		bootID:   shared.NewID(),
-		seenPath: filepath.Join(filepath.Dir(cfg.Storage.SpoolPath), "cursor-seen.json"),
-		httpPrev: map[string]bool{},
+		cfg:       cfg,
+		sp:        sp,
+		col:       collector.New(),
+		snd:       sender.New(cfg.Server.URL, cfg.Token(), cfg.Server.Timeout.Duration),
+		log:       log,
+		bootID:    shared.NewID(),
+		seenPath:  filepath.Join(dir, "cursor-seen.json"),
+		statePath: filepath.Join(dir, "inspect-state.json"),
+		httpPrev:  map[string]bool{},
+		proj:      agent.NewState(),
+		cronTail:  &collector.CronTail{Seen: map[string]bool{}},
 	}
 }
 
@@ -73,71 +85,90 @@ func (r *Runner) enqueue(eventType, serviceKey, runKey string, payload any) {
 	}
 }
 
-// CollectOnce gathers one round of heartbeat, metric, ports and self-status.
+// CollectOnce runs Part 1 (facts) then Part 2 (agent project) and optional extras.
 func (r *Runner) CollectOnce() {
-	r.emitHeartbeat()
-	r.emitMetric()
-	r.emitPorts()
-	r.emitSelfState()
-	r.emitSelfStatus()
-	r.emitSystemd()
+	r.collectAndProject()
 	r.emitCursorAgent()
 	r.emitHTTP()
 }
 
-func (r *Runner) emitHeartbeat() {
+func (r *Runner) collectAndProject() {
+	n, _ := r.sp.Count()
+	opt := collector.CollectOptions{
+		HostRoot: r.hostRoot,
+		Run:      r.runCmd,
+		CronTail: r.cronTail,
+		CronLogs: r.cfg.Collectors.Cron.LogPaths,
+	}
+	snap := r.col.Collect(r.cfg, opt)
+	r.lastSnap = &snap
+	meta := agent.Meta{
+		Hostname:         r.cfg.Machine.DisplayName,
+		HeartbeatSeconds: int(r.cfg.Intervals.Heartbeat.Duration.Seconds()),
+		UptimeSeconds:    snap.UptimeSeconds,
+		SpoolQueued:      n,
+		Promote:          r.cfg.Collectors.Ports.Promote,
+	}
+	evs, next := agent.Project(snap, r.proj, meta)
+	r.proj = next
+	for _, e := range evs {
+		r.enqueue(e.Type, e.ServiceKey, e.RunKey, e.Payload)
+	}
+	r.saveInspectState()
+}
+
+func (r *Runner) emitHeartbeatAlive() {
+	if r.lastSnap == nil {
+		r.collectAndProject()
+		return
+	}
+	n, _ := r.sp.Count()
 	r.enqueue(event.TypeHeartbeat, "", "", event.Heartbeat{
 		Hostname:                 r.cfg.Machine.DisplayName,
 		OS:                       "linux",
 		Arch:                     "amd64",
-		CollectorVersion:         "1.2.0",
+		CollectorVersion:         "1.3.0",
 		HeartbeatIntervalSeconds: int(r.cfg.Intervals.Heartbeat.Duration.Seconds()),
 		UptimeSeconds:            r.col.Uptime(),
 	})
-}
-
-func (r *Runner) emitMetric() {
-	c := r.cfg.Collectors
-	ms := r.col.Sample(
-		c.Filesystems.Enabled, c.Filesystems.IncludeMounts, c.Filesystems.ExcludeFSType, c.Network.ExcludeInterfaces,
-		c.CPU, c.Memory, c.DiskIO.Enabled, c.Network.Enabled,
-	)
-	r.enqueue(event.TypeMetricSample, "", "", ms)
-}
-
-func (r *Runner) emitPorts() {
-	if !r.cfg.Collectors.Ports.Enabled {
-		return
-	}
-	ports, ok := collector.ReadPorts()
-	if !ok {
-		return
-	}
-	r.enqueue(event.TypePortSnapshot, "", "", map[string]any{"ports": ports})
-}
-
-func (r *Runner) emitSelfState() {
-	r.enqueue(event.TypeServiceState, selfServiceKey, "", event.ServiceState{
-		Name:     "Board Client",
-		Type:     "daemon",
-		State:    "running",
-		Summary:  "collecting metrics",
-		Severity: "normal",
+	ttl := agent.InspectTTL
+	r.enqueue(event.TypeServiceState, agent.InspectKey, "", event.ServiceState{
+		Name: "Host Inspect", Type: "agent", State: "running",
+		Summary: "alive", Severity: "normal", TTLSeconds: &ttl,
 	})
-}
-
-func (r *Runner) emitSelfStatus() {
-	n, _ := r.sp.Count()
 	r.enqueue(event.TypeStatusUpsert, selfServiceKey, "", event.StatusUpsert{
 		Items: []event.StatusItem{
 			{Key: "uptime", Label: "系统运行时间", Value: json.RawMessage(itoa(r.col.Uptime())), ValueType: "duration", Unit: "s", Severity: "normal", DisplayFormat: "duration", SortOrder: 10},
-			{Key: "spool_queue", Label: "待发送队列", Value: json.RawMessage(itoa(int64(n))), ValueType: "number", Unit: "", Severity: sevForQueue(n), DisplayFormat: "number", SortOrder: 20},
+			{Key: "spool_queue", Label: "待发送队列", Value: json.RawMessage(itoa(int64(n))), ValueType: "number", Severity: sevForQueue(n), DisplayFormat: "number", SortOrder: 20},
 		},
 	})
 }
 
 func (r *Runner) emitSelfLog(markdown, severity string) {
 	r.enqueue(event.TypeLogAppend, selfServiceKey, "", event.LogPayload{Markdown: markdown, Severity: severity, Source: "board-client"})
+}
+
+func (r *Runner) saveInspectState() {
+	if r.statePath == "" || r.proj == nil {
+		return
+	}
+	b, _ := json.Marshal(r.proj)
+	_ = os.MkdirAll(filepath.Dir(r.statePath), 0o750)
+	_ = os.WriteFile(r.statePath, b, 0o600)
+}
+
+func (r *Runner) loadInspectState() {
+	b, err := os.ReadFile(r.statePath)
+	if err != nil {
+		return
+	}
+	st := agent.NewState()
+	if json.Unmarshal(b, st) == nil {
+		r.proj = st
+		if r.cronTail != nil && st.CronSeen != nil {
+			r.cronTail.Seen = st.CronSeen
+		}
+	}
 }
 
 // Run starts all loops and blocks until ctx is cancelled.
@@ -153,27 +184,26 @@ func (r *Runner) Run(ctx context.Context) {
 		r.log.Info("connected to board-server", "url", r.cfg.Server.URL)
 	}
 
+	r.loadInspectState()
 	r.CollectOnce()
-	r.emitSelfLog("board-client 启动，开始采集系统指标。", "info")
+	r.emitSelfLog("board-client 启动，开始采集系统快照。", "info")
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); r.senderLoop(ctx) }()
 
-	metricT := time.NewTicker(r.cfg.Intervals.Metrics.Duration)
+	collectEvery := r.cfg.Intervals.Collect.Duration
+	if collectEvery <= 0 {
+		collectEvery = time.Minute
+	}
+	collectT := time.NewTicker(collectEvery)
 	hbT := time.NewTicker(r.cfg.Intervals.Heartbeat.Duration)
-	portsT := time.NewTicker(r.cfg.Intervals.Ports.Duration)
-	sysT := time.NewTicker(r.cfg.Intervals.Systemd.Duration)
 	curT := time.NewTicker(r.cfg.Intervals.CursorAgent.Duration)
 	httpT := time.NewTicker(r.cfg.Intervals.HTTP.Duration)
-	logT := time.NewTicker(time.Minute)
-	defer metricT.Stop()
+	defer collectT.Stop()
 	defer hbT.Stop()
-	defer portsT.Stop()
-	defer sysT.Stop()
 	defer curT.Stop()
 	defer httpT.Stop()
-	defer logT.Stop()
 
 	for {
 		select {
@@ -181,43 +211,15 @@ func (r *Runner) Run(ctx context.Context) {
 			wg.Wait()
 			return
 		case <-hbT.C:
-			r.emitHeartbeat()
-		case <-metricT.C:
-			r.emitMetric()
-			r.emitSelfStatus()
-		case <-portsT.C:
-			r.emitPorts()
-		case <-sysT.C:
-			r.emitSystemd()
+			r.emitHeartbeatAlive()
+		case <-collectT.C:
+			r.collectAndProject()
 		case <-curT.C:
 			r.emitCursorAgent()
 		case <-httpT.C:
 			r.emitHTTP()
-		case <-logT.C:
-			r.emitSelfLog("采集心跳正常，最近一分钟无异常。", "info")
 		}
 	}
-}
-
-func (r *Runner) emitSystemd() {
-	cfg := r.cfg.Collectors.Systemd
-	if !cfg.Enabled {
-		return
-	}
-	units, err := collector.ReadSystemdUnits(cfg.IncludeAll, cfg.Include)
-	if err != nil {
-		r.enqueue(event.TypeCollectorNotice, selfServiceKey, "", event.CollectorNotice{
-			Severity: "warning",
-			Code:     "systemd_read_failed",
-			Markdown: "读取 systemd unit 失败：" + err.Error(),
-		})
-		return
-	}
-	filtered := collector.FilterUnits(units, cfg.IncludeAll, cfg.Include, cfg.ExcludePrefixes)
-	if len(filtered) == 0 {
-		return
-	}
-	r.enqueue(event.TypeServiceSnapshot, "", "", collector.UnitsToSnapshot(filtered))
 }
 
 type cursorSeenFile struct {

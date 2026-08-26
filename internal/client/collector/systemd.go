@@ -1,7 +1,6 @@
 package collector
 
 import (
-	"os/exec"
 	"strings"
 
 	"agentboard/internal/event"
@@ -18,6 +17,14 @@ type Unit struct {
 
 // ReadSystemdUnits runs systemctl show and returns matching units.
 func ReadSystemdUnits(includeAll bool, include []string) ([]Unit, error) {
+	return ReadSystemdUnitsCmd(DefaultCommander, includeAll, include)
+}
+
+// ReadSystemdUnitsCmd is ReadSystemdUnits with an injectable commander.
+func ReadSystemdUnitsCmd(run Commander, includeAll bool, include []string) ([]Unit, error) {
+	if run == nil {
+		run = DefaultCommander
+	}
 	args := []string{"show", "--no-pager", "--property=Id,LoadState,ActiveState,SubState,Description"}
 	if includeAll {
 		args = append(args, "*.service")
@@ -27,8 +34,7 @@ func ReadSystemdUnits(includeAll bool, include []string) ([]Unit, error) {
 		}
 		args = append(args, include...)
 	}
-	cmd := exec.Command("systemctl", args...)
-	out, err := cmd.Output()
+	out, err := run("systemctl", args...)
 	if err != nil {
 		return nil, err
 	}

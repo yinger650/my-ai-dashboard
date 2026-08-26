@@ -109,3 +109,86 @@ collectors:
 		t.Fatalf("second probe should not add another failure log, logs=%d batch=%d", logs, len(batch2))
 	}
 }
+
+func TestCollectAndProjectEnqueuesInspectWithoutOwnLogs(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ABP_MACHINE_TOKEN", "abp_m_test")
+	cfgPath := filepath.Join(dir, "client.yaml")
+	src := `version: 1
+server:
+  url: "http://127.0.0.1:9"
+machine:
+  key: "home-server"
+storage:
+  spool_path: "` + filepath.Join(dir, "spool.db") + `"
+collectors:
+  cpu: true
+  memory: true
+  ports:
+    enabled: true
+  docker:
+    enabled: true
+  cron:
+    enabled: true
+  nginx:
+    enabled: true
+`
+	if err := os.WriteFile(cfgPath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	sp, err := spool.Open(cfg.Storage.SpoolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sp.Close() })
+
+	r := New(cfg, sp, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	r.runCmd = func(name string, args ...string) ([]byte, error) {
+		if name == "ss" {
+			return []byte("tcp LISTEN 0 128 0.0.0.0:80 0.0.0.0:* users:((\"nginx\",pid=1,fd=6))\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	r.collectAndProject()
+
+	batch, err := sp.Batch(100, 256*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]int{}
+	inspectLogs := 0
+	hasInspect := false
+	hasHeartbeat := false
+	for _, q := range batch {
+		var env event.Envelope
+		if err := json.Unmarshal([]byte(q.Payload), &env); err != nil {
+			t.Fatal(err)
+		}
+		types[env.EventType]++
+		if env.ServiceKey == "host-inspect" {
+			hasInspect = true
+			if env.EventType == event.TypeLogAppend {
+				inspectLogs++
+			}
+		}
+		if env.EventType == event.TypeHeartbeat {
+			hasHeartbeat = true
+		}
+	}
+	if !hasHeartbeat {
+		t.Fatalf("missing heartbeat: %v", types)
+	}
+	if !hasInspect {
+		t.Fatal("missing host-inspect events")
+	}
+	if inspectLogs != 0 {
+		t.Fatalf("host-inspect must not append logs, got %d", inspectLogs)
+	}
+	if types[event.TypePortSnapshot] != 1 {
+		t.Fatalf("port snapshot = %d types=%v", types[event.TypePortSnapshot], types)
+	}
+}
