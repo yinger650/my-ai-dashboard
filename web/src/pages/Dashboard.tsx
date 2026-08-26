@@ -11,12 +11,20 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
 import { Label } from "../components/ui/label";
+import { cn } from "../lib/utils";
+import {
+  countMachineHealth,
+  filterBoardMachines,
+  readShowOfflinePreference,
+  writeShowOfflinePreference,
+} from "../lib/board-filter";
 
 export function DashboardPage() {
   const qc = useQueryClient();
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [search, setSearch] = useState("");
   const [editMode, setEditMode] = useState(false);
+  const [showOffline, setShowOffline] = useState(readShowOfflinePreference);
 
   const { data, isLoading, error, dataUpdatedAt } = useQuery({
     queryKey: ["board"],
@@ -30,22 +38,19 @@ export function DashboardPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-settings"] }),
   });
 
+  function onShowOfflineChange(next: boolean) {
+    setShowOffline(next);
+    writeShowOfflinePreference(next);
+  }
+
+  const allMachines = data?.machines ?? [];
   const machines = useMemo(
-    () =>
-      (data?.machines ?? []).filter((m) =>
-        search
-          ? m.name.toLowerCase().includes(search.toLowerCase()) || m.machine_key.includes(search)
-          : true,
-      ),
-    [data?.machines, search],
+    () => filterBoardMachines(allMachines, { search, showOffline }),
+    [data?.machines, search, showOffline],
   );
 
-  const counts = { online: 0, degraded: 0, offline: 0 };
-  for (const m of data?.machines ?? []) {
-    if (m.health === "online") counts.online++;
-    else if (m.health === "degraded" || m.health === "stale") counts.degraded++;
-    else if (m.health === "offline") counts.offline++;
-  }
+  const counts = countMachineHealth(allMachines);
+  const hiddenOffline = showOffline ? 0 : counts.offline;
 
   const savedLayout = Array.isArray(data?.layout) ? (data?.layout as Layout) : null;
   const pollMs = (data?.poll_interval_seconds ?? 15) * 1000;
@@ -58,7 +63,15 @@ export function DashboardPage() {
           <p className="text-sm text-slate-400">
             <span className="sev-normal">在线 {counts.online}</span> ·{" "}
             <span className="sev-warning">降级 {counts.degraded}</span> ·{" "}
-            <span className="sev-offline">离线 {counts.offline}</span>
+            <button
+              type="button"
+              className={cn("sev-offline hover:underline", hiddenOffline > 0 && "opacity-60")}
+              onClick={() => onShowOfflineChange(!showOffline)}
+              title={showOffline ? "点击隐藏离线机器" : "点击显示离线机器"}
+            >
+              离线 {counts.offline}
+              {hiddenOffline > 0 ? "（已隐藏）" : ""}
+            </button>
             {data && <> · 异常访问 {data.recent_abnormal}</>}
           </p>
         </div>
@@ -71,6 +84,12 @@ export function DashboardPage() {
               placeholder="搜索机器…"
               className="w-44 pl-8 sm:w-56"
             />
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch id="show-offline" checked={showOffline} onCheckedChange={onShowOfflineChange} />
+            <Label htmlFor="show-offline" className="mb-0 text-sm text-slate-400">
+              显示离线
+            </Label>
           </div>
           <div className="flex items-center gap-2">
             <Switch id="auto-refresh" checked={autoRefresh} onCheckedChange={setAutoRefresh} />
@@ -109,13 +128,12 @@ export function DashboardPage() {
       {isLoading && <div className="text-slate-400">加载中…</div>}
 
       {!isLoading && machines.length === 0 && (
-        <div className="rounded-xl border border-slate-800 bg-[#0f1626] p-8 text-center text-slate-400">
-          还没有机器。前往{" "}
-          <Link className="text-indigo-400 underline" to="/settings">
-            设置
-          </Link>{" "}
-          创建一台并生成 Token。
-        </div>
+        <EmptyBoard
+          total={allMachines.length}
+          hiddenOffline={hiddenOffline}
+          searching={Boolean(search.trim())}
+          onShowOffline={() => onShowOfflineChange(true)}
+        />
       )}
 
       {machines.length > 0 && (
@@ -128,6 +146,47 @@ export function DashboardPage() {
           onLayoutChange={(layout) => saveLayout.mutate(layout)}
         />
       )}
+    </div>
+  );
+}
+
+function EmptyBoard({
+  total,
+  hiddenOffline,
+  searching,
+  onShowOffline,
+}: {
+  total: number;
+  hiddenOffline: number;
+  searching: boolean;
+  onShowOffline: () => void;
+}) {
+  if (total === 0) {
+    return (
+      <div className="rounded-xl border border-slate-800 bg-[#0f1626] p-8 text-center text-slate-400">
+        还没有机器。前往{" "}
+        <Link className="text-indigo-400 underline" to="/settings">
+          设置
+        </Link>{" "}
+        创建一台并生成 Token。
+      </div>
+    );
+  }
+
+  if (hiddenOffline > 0 && !searching) {
+    return (
+      <div className="rounded-xl border border-slate-800 bg-[#0f1626] p-8 text-center text-slate-400">
+        已隐藏 {hiddenOffline} 台离线机器。
+        <button type="button" className="ml-2 text-indigo-400 underline" onClick={onShowOffline}>
+          显示离线
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-800 bg-[#0f1626] p-8 text-center text-slate-400">
+      没有匹配的机器。
     </div>
   );
 }
