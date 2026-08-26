@@ -22,6 +22,18 @@ func scanMetric(sc interface{ Scan(...any) error }) (*MetricSample, error) {
 	return &m, nil
 }
 
+// LatestPortSnapshot returns the newest machine.port_snapshot payload.
+func (s *Store) LatestPortSnapshot(ctx context.Context, machineID string) (payload string, occurredAt string, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT payload_json, occurred_at FROM events
+		WHERE machine_id = ? AND event_type = 'machine.port_snapshot'
+		ORDER BY occurred_at DESC LIMIT 1`, machineID).Scan(&payload, &occurredAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrNotFound
+	}
+	return payload, occurredAt, err
+}
+
 // LatestMetric returns the most recent metric sample for a machine.
 func (s *Store) LatestMetric(ctx context.Context, machineID string) (*MetricSample, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+metricCols+` FROM metric_samples WHERE machine_id = ? ORDER BY occurred_at DESC LIMIT 1`, machineID)

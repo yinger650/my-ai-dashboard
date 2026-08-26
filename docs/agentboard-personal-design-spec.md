@@ -8,7 +8,7 @@
 >
 > 基线：1.0（2026-08-18，见 [archive/agentboard-personal-design-spec-v1.0.md](archive/agentboard-personal-design-spec-v1.0.md)）
 >
-> 对应仓库版本：`board-server` / `board-client` **0.1.3**（`Makefile` `LDFLAGS`）；客户端心跳上报 `collector_version` 为 **1.2.0**
+> 对应仓库版本：`board-server` / `board-client` **0.1.3**（`Makefile` `LDFLAGS`）；客户端心跳上报 `collector_version` 为 **1.3.0**
 >
 > 生产地址：<https://board.yinger650.com>
 >
@@ -37,6 +37,7 @@
 | Service TTL 投影 | `ttl_seconds` 超时后只读投影为 `stale` + 「TTL 过期」，不改库 |
 | HTTP 网站探测 | `board-client` 对目标 URL 发探测，映射为 `virtual` Service |
 | Cursor transcript 扫描 | 客户端扫描本机 Cursor 会话文件，启发式总结（不是 Cloud Agents API） |
+| 两段式主机客户端 | Part 1 采集 `HostSnapshot`；Part 2 Agent 投影为 Event。Docker / cron / nginx 精简态 |
 | 看板隐藏离线 | 前端开关「显示离线」，`localStorage` 键 `abp.show-offline` |
 | 服务端保存网格布局 | `settings.board_layout`，不是 `localStorage` |
 | 卡片日志流 | Dashboard 卡片内嵌最近日志与状态列表 |
@@ -63,12 +64,12 @@
 | systemd 快照 | 不自动建 Service | 开启 `auto_create_services` 时按 unit 投影为 Service |
 | 每日字节配额 | 必须落库判定 | 表已建，**未读写** |
 | Artifact 下载路由 | `GET /api/v1/artifacts/{id}/download` | 仅 `GET /api/v1/artifacts/{id}/content` |
-| 端口查询 API | `GET /api/v1/machines/{id}/ports` | 尚未实现 |
+| 端口查询 API | `GET /api/v1/machines/{id}/ports` | 已实现；返回最新 `machine.port_snapshot` |
 | 维护任务 | 每日清理指标/事件/文件 | 现行仅删过期会话 |
 
 ### 0.4 1.0 目标、尚未实现
 
-Docker Compose / Caddy / 备份恢复 CLI、Playwright E2E、OpenAPI 与 `event-schema.json`、`log_tasks`（journald / file_tail / Cursor Cloud Agents API 总结）、指标时间桶聚合、端口详情页、Artifact 独立下载与 ingest 幂等、Token 日配额、完整清理与阈值生效、管理员改密、未鉴权全局限流、浅色主题、设置分子路由。
+Docker Compose / Caddy / 备份恢复 CLI、Playwright E2E、OpenAPI 与 `event-schema.json`、通用 `log_tasks`（任意 journald / file_tail / Cursor Cloud Agents API 总结）、指标时间桶聚合、Artifact 独立下载与 ingest 幂等、Token 日配额、完整清理与阈值生效、管理员改密、未鉴权全局限流、浅色主题、设置分子路由。
 
 这些条目仍是后续目标，不得在实现时静默删除；新功能优先补齐缺口，而不是再换栈。
 
@@ -542,7 +543,7 @@ terminal states -> 禁止转换
 
 ### 11.11 `machine.port_snapshot`
 
-payload 与 1.0 相同（`ports[]`：protocol / address / port / pid / process）。现行写入 Event，**没有** `GET /machines/{id}/ports` 查询接口，前端详情页也不展示端口表。
+payload 与 1.0 相同（`ports[]`：protocol / address / port / pid / process）。现行写入 Event，并由 `GET /api/v1/machines/{id}/ports` 返回最新一条。机器详情页展示监听端口表。
 
 ## 12. HTTP API 规格
 
@@ -683,7 +684,7 @@ AgentBoard Personal  2026-08-18 18:30:01 +08:00
 - `PATCH /api/v1/admin/machines/{id}`
 - `DELETE /api/v1/admin/machines/{id}`（软删除并吊销 Token）
 
-尚未实现：`GET /api/v1/machines/{id}/ports`。
+已实现：`GET /api/v1/machines/{id}/ports` 返回 `{ ports, occurred_at }`；无快照时 `ports` 为空数组。
 
 创建请求：
 
@@ -827,7 +828,7 @@ Dashboard 顶部计数（前端）：
 
 ### 13.5 端口快照
 
-客户端可上报 `machine.port_snapshot`。服务端保存 Event。详情 API 与 UI 尚未展示。监听 `0.0.0.0` 或 `::` 不得仅凭此判断公网暴露。
+客户端可上报 `machine.port_snapshot`。服务端保存 Event，`GET /api/v1/machines/{id}/ports` 取最新一条。监听 `0.0.0.0` 或 `::` 不得仅凭此判断公网暴露。
 
 ### 13.6 系统服务快照
 
@@ -876,9 +877,10 @@ storage:
   spool_path: "/var/lib/agentboard-client/spool.db"
   max_events: 50000
 intervals:
+  collect: 60s
   heartbeat: 30s
   metrics: 30s
-  ports: 1h
+  ports: 60s
   systemd: 60s
   cursor_agent: 5m
   http: 60s
@@ -889,6 +891,12 @@ collectors:
     enabled: true
     include_mounts: ["/"]
   ports:
+    enabled: true
+  docker:
+    enabled: true
+  cron:
+    enabled: true
+  nginx:
     enabled: true
   systemd:
     enabled: false
@@ -914,7 +922,7 @@ collectors:
 - Token 只从环境变量读取，禁止写入 YAML。
 - 支持 `${ENV_NAME}` 展开时，dump/日志必须隐藏名字包含 `TOKEN/KEY/SECRET/PASSWORD` 的值。
 - `tls_insecure_skip_verify=true` 仅供本地测试。
-- 1.0 的 `log_tasks` / Cron / Cursor Cloud API summarizer **尚未实现**。
+- 1.0 的通用 `log_tasks` / Cursor Cloud API summarizer **尚未实现**。cron 执行记录只走窄范围尾读。
 - 现行 spool 只有 `max_events`，无 `max_bytes`。
 
 ### 14.3 本地 spool
@@ -931,19 +939,30 @@ collectors:
 ### 14.4 启动流程
 
 1. 解析配置，打开 spool。
-2. 立即采集 heartbeat、metric、ports，并上报自身 `board-client` Service。
-3. 启动 ticker 与 sender。
+2. 立即跑一轮 Part 1 采集 + Part 2 投影，上报 `board-client` 与 `host-inspect`。
+3. 启动 collect / heartbeat ticker 与 sender。不再每分钟写「采集心跳正常」。
 4. SIGTERM 时停止新任务并尽量刷盘后退出。
 
 `/ingest/v1/ping` 失败不退出、进入离线缓冲；鉴权 401/403 应当退出（1.0；现行以实现为准）。
 
 ### 14.5 采集器
 
+客户端分两段，同一进程：
+
+1. **Part 1 Collect**（无 AI）：默认每 60 秒用固定指令聚成 `HostSnapshot`（`/proc` 资源、`ss` 端口、`docker ps/images`、crontab、nginx 配置、systemd include）。不 ingest。外部命令一律参数数组。
+2. **Part 2 Agent**（`internal/client/agent`）：把快照投影为已有 Event，统一入 spool。`host-inspect` 只报存活（`service.state` + `alive` status，TTL 180），禁止给自己 `log.append`。当前态走 `status.upsert` / `log.pin`；已发生的事走 `run.transition` / `log.append`。内容未变不重复 pin。
+
 CPU / 内存 / 文件系统 / 磁盘 IO / 网络 / 端口：与 1.0 相同，读 `/proc`，禁止 `top` 解析，禁止 shell 拼接。
 
-systemd：`systemctl show` 指定 unit；配置为 `include` / `include_all` / `exclude_prefixes`。
+systemd：`systemctl show` 指定 unit；配置为 `include` / `include_all` / `exclude_prefixes`。投影时 `nginx.service` 与端口提升的 `nginx` 共用 `service_key=nginx`。
 
-客户端同时为自己上报 `service_key=board-client` 的 `service.state` 与 `status.upsert`，并定期写一条启动/存活日志。
+Docker（可选）：可用则创建 `docker` daemon。当前态为运行中/已停止/镜像数，置顶只列运行中容器；启停变化 `log.append`。不调用 `docker logs`。
+
+Cron（可选）：`cron` scheduled。置顶日程表（几点几分 / 用户 / 任务），注释行隐藏。执行记录窄范围读取 journald/`/var/log/cron`，每次 `run.transition` + `log.append`。
+
+Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` 的反代；重启/全部隐藏写入滚动日志。不上传 access/error 原文。
+
+客户端同时为自己上报 `service_key=board-client` 的 `service.state` 与 `status.upsert`。启动时写一条启动日志，不再周期性刷「采集正常」。
 
 ### 14.6 日志源（尚未实现）
 
@@ -1029,6 +1048,8 @@ python3 skills/agentboard-report/scripts/report.py heartbeat "alive"
 
 推荐 `service_key`：`cursor` / `codex` / `openclaw`。看板上该 Machine 下会出现对应 Agent 服务。
 
+主机上的 `host-inspect` 是 board-client 内嵌的确定性投影 Agent，不是 LLM：自身只上报存活；Docker / cron / nginx / 端口表等整理结果挂到对应服务，不写进 `host-inspect` 的滚动日志。
+
 ## 16. 前端产品规格
 
 ### 16.1 视觉原则
@@ -1103,7 +1124,7 @@ Health 文案：在线 / 离线 / 延迟（stale）/ 降级 / 未知 / 已禁用
 
 Header：名称、health、主机名、OS、架构、Collector 版本、最后上报。现行不展示 boot ID。
 
-Overview：CPU% + 内存% 图；range `1h/6h/24h/7d/30d`。磁盘/网络独立图、文件系统表、Ports / System Services / 聚合 Logs Tab：**尚未做成详情页**。服务以列表展示。必须有加载 / 失败 / 空数据文案。
+Overview：CPU% + 内存% 图；range `1h/6h/24h/7d/30d`。磁盘/网络独立图、文件系统表：**尚未做成独立图**。监听端口表已在详情页展示。服务以列表展示。必须有加载 / 失败 / 空数据文案。
 
 ### 16.5 Service Detail
 

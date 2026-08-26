@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,6 +134,15 @@ func TestIngestProjectionsAndDuplicates(t *testing.T) {
 	}
 	if r, _ := st.IngestEvent(ctx, dupEnv, auth, now); r.Status != "duplicate" {
 		t.Fatalf("second send should be duplicate, got %+v", r)
+	}
+
+	ports := map[string]any{"ports": []map[string]any{{"protocol": "tcp", "address": "0.0.0.0", "port": 80, "process": "nginx"}}}
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypePortSnapshot, "", "", ports), auth, now); err != nil || r.Status != "accepted" {
+		t.Fatalf("port snapshot: %v %+v", err, r)
+	}
+	raw, occurred, err := st.LatestPortSnapshot(ctx, m.ID)
+	if err != nil || occurred == "" || !strings.Contains(raw, "nginx") {
+		t.Fatalf("latest ports: %v %q %s", err, occurred, raw)
 	}
 }
 

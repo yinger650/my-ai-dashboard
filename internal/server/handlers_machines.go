@@ -73,6 +73,39 @@ func (s *Server) handleMachineServices(w http.ResponseWriter, r *http.Request) {
 	api.WriteData(w, rid, svcs, nil)
 }
 
+func (s *Server) handleMachinePorts(w http.ResponseWriter, r *http.Request) {
+	rid := requestID(r.Context())
+	id := chi.URLParam(r, "id")
+	m, err := s.st.GetMachineByID(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) || (m != nil && m.DeletedAt != nil) {
+		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
+		return
+	}
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
+		return
+	}
+	raw, occurred, err := s.st.LatestPortSnapshot(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		api.WriteData(w, rid, map[string]any{"ports": []any{}, "occurred_at": nil}, nil)
+		return
+	}
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
+		return
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
+		return
+	}
+	ports := payload["ports"]
+	if ports == nil {
+		ports = []any{}
+	}
+	api.WriteData(w, rid, map[string]any{"ports": ports, "occurred_at": occurred}, nil)
+}
+
 func (s *Server) handleMachineLogs(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")

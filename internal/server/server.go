@@ -71,6 +71,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/machines/{id}/metrics", s.handleMachineMetrics)
 			r.Get("/machines/{id}/services", s.handleMachineServices)
 			r.Get("/machines/{id}/logs", s.handleMachineLogs)
+			r.Get("/machines/{id}/ports", s.handleMachinePorts)
 			r.Get("/services/{id}", s.handleServiceDetail)
 			r.Get("/services/{id}/statuses", s.handleServiceStatuses)
 			r.Get("/services/{id}/logs", s.handleServiceLogs)
