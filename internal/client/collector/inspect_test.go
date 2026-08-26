@@ -222,8 +222,15 @@ func TestReadCronJobsFromRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(etc, "cron.d", "jobs"), []byte("0 2 * * * root /bin/two\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	spool := filepath.Join(root, "var", "spool", "cron")
+	if err := os.MkdirAll(spool, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spool, "root"), []byte("27 7 * * * /usr/bin/acme.sh --cron\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	jobs := ReadCronJobs(root, nil)
-	if len(jobs) != 2 {
+	if len(jobs) != 3 {
 		t.Fatalf("jobs = %d %+v", len(jobs), jobs)
 	}
 }

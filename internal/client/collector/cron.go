@@ -103,7 +103,7 @@ func expandCronPaths(root string, bases []string) []string {
 		p := joinRoot(root, b)
 		out = append(out, p)
 	}
-	for _, dir := range []string{"/etc/cron.d", "/var/spool/cron/crontabs"} {
+	for _, dir := range []string{"/etc/cron.d", "/var/spool/cron/crontabs", "/var/spool/cron"} {
 		entries, err := os.ReadDir(joinRoot(root, dir))
 		if err != nil {
 			continue
