@@ -36,6 +36,7 @@ const statuses: StatusItem[] = [
     unit: null,
     severity: "normal",
     display_format: "text",
+    sort_order: 10,
     service_id: "s-nginx",
     service_key: "nginx",
   },
