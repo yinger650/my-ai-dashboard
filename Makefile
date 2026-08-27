@@ -2,7 +2,7 @@ SHELL := /bin/bash
 GO ?= go
 PNPM ?= pnpm
 BIN_DIR := bin
-LDFLAGS := -X main.version=0.1.6 -X main.commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo dev) -X main.buildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -X main.version=0.1.7 -X main.commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo dev) -X main.buildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 .PHONY: help
 help:
