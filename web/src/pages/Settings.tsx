@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Copy, KeyRound, Server, Shield, Terminal } from "lucide-react";
+import { Copy, Database, KeyRound, Server, Shield, Terminal } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api";
 import type { Machine, TokenInfo } from "../types";
-import { localTime } from "../format";
+import { fmtBytes, localTime } from "../format";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
@@ -82,6 +82,8 @@ export function SettingsPage() {
   const [title, setTitle] = useState<string>("");
   const [poll, setPoll] = useState<string>("");
   const [tz, setTz] = useState<string>("");
+  const [eventDays, setEventDays] = useState<string>("");
+  const [quotaGB, setQuotaGB] = useState<string>("");
   const saveBoard = useMutation({
     mutationFn: () =>
       apiPatch("/api/v1/admin/settings", {
@@ -93,6 +95,31 @@ export function SettingsPage() {
       qc.invalidateQueries({ queryKey: ["admin-settings"] });
       qc.invalidateQueries({ queryKey: ["board"] });
     },
+  });
+
+  const saveRetention = useMutation({
+    mutationFn: () => {
+      const days = Number(eventDays || settings.data?.event_retention_days || 30);
+      const gb = Number(quotaGB || 5);
+      return apiPatch("/api/v1/admin/settings", {
+        event_retention_days: days,
+        access_retention_days: days,
+        raw_metric_retention_days: days,
+        event_quota_bytes: Math.round(gb * 1024 * 1024 * 1024),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-settings"] }),
+  });
+
+  const runMaintenance = useMutation({
+    mutationFn: () =>
+      apiPost<{
+        expired_sessions_deleted: number;
+        events_deleted: number;
+        access_deleted: number;
+        quota_deleted: number;
+        events_bytes: number;
+      }>("/api/v1/admin/maintenance/run", {}),
   });
 
   const resetLayout = useMutation({
@@ -196,6 +223,58 @@ export function SettingsPage() {
               重置网格布局
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="h-4 w-4 text-indigo-400" /> 日志存储
+          </CardTitle>
+          <CardDescription>滚动日志、事件与访问记录最多保留一个月，容量上限 5 GiB。置顶当前态不会被清掉。</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <Label>保留天数</Label>
+              <Input
+                type="number"
+                min={1}
+                max={365}
+                value={eventDays || String(settings.data?.event_retention_days ?? 30)}
+                onChange={(e) => setEventDays(e.target.value)}
+                className="w-28"
+              />
+            </div>
+            <div>
+              <Label>容量上限（GiB）</Label>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                value={
+                  quotaGB ||
+                  String(
+                    Math.round(Number(settings.data?.event_quota_bytes ?? 5 * 1024 * 1024 * 1024) / (1024 * 1024 * 1024)),
+                  )
+                }
+                onChange={(e) => setQuotaGB(e.target.value)}
+                className="w-28"
+              />
+            </div>
+            <Button onClick={() => saveRetention.mutate()} disabled={saveRetention.isPending}>
+              保存
+            </Button>
+            <Button variant="outline" onClick={() => runMaintenance.mutate()} disabled={runMaintenance.isPending}>
+              {runMaintenance.isPending ? "清理中…" : "立即清理"}
+            </Button>
+          </div>
+          {runMaintenance.data && (
+            <p className="text-xs text-slate-400">
+              已删事件 {runMaintenance.data.events_deleted} · 访问 {runMaintenance.data.access_deleted} · 超额{" "}
+              {runMaintenance.data.quota_deleted} · 当前占用 {fmtBytes(runMaintenance.data.events_bytes)}
+            </p>
+          )}
         </CardContent>
       </Card>
 

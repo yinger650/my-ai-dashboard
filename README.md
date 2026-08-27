@@ -129,6 +129,8 @@ make test-web
 | `ABP_DATA_DIR` | `/var/lib/agentboard` | 数据目录（DB、artifacts） |
 | `ABP_SECURE_COOKIES` | `true` | 生产必须 true（HTTPS）；本地 HTTP 置 false |
 | `ABP_PUBLIC_URL` | 必填（生产） | 对外 URL |
+| `ABP_EVENT_RETENTION_DAYS` | `30` | 事件/滚动日志最多保留一个月 |
+| `ABP_EVENT_QUOTA_BYTES` | `5 GiB` | 日志容量上限，超额删最旧滚动日志 |
 
 完整清单见 `internal/config/config.go`。
 

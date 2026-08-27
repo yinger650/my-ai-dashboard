@@ -324,9 +324,10 @@ flowchart TD
 | `ABP_ARTIFACT_DIR` | `$ABP_DATA_DIR/artifacts` | 文件目录 |
 | `ABP_MAX_UPLOAD_BYTES` | `10485760` | 单文件上限 10 MiB |
 | `ABP_ARTIFACT_QUOTA_BYTES` | `5368709120` | 总文件上限 5 GiB |
-| `ABP_RAW_METRIC_RETENTION_DAYS` | `30` | 已加载；完整清理尚未执行 |
-| `ABP_EVENT_RETENTION_DAYS` | `90` | 已加载；完整清理尚未执行 |
-| `ABP_ACCESS_RETENTION_DAYS` | `90` | 已加载；完整清理尚未执行 |
+| `ABP_RAW_METRIC_RETENTION_DAYS` | `30` | 原始指标最多保留一个月 |
+| `ABP_EVENT_RETENTION_DAYS` | `30` | 事件/滚动日志最多保留一个月 |
+| `ABP_ACCESS_RETENTION_DAYS` | `30` | 访问记录最多保留一个月 |
+| `ABP_EVENT_QUOTA_BYTES` | `5368709120` | 事件 payload 上限 5 GiB；超额先删最旧 `log.append` |
 | `ABP_SESSION_HOURS` | `12` | 管理员会话时长 |
 | `ABP_TRUSTED_PROXY_CIDRS` | 空 | 可信反向代理网段 |
 | `ABP_LOG_LEVEL` | `info` | 日志级别 |
@@ -836,9 +837,7 @@ Dashboard 顶部计数（前端）：
 
 ### 13.7 清理任务
 
-1.0 要求每天 03:20 清理指标、事件、访问日志、软删 Artifact、PRAGMA optimize。
-
-现行 `POST /api/v1/admin/maintenance/run` 只删除过期管理员会话。完整清理仍是后续目标；保留天数环境变量必须继续被读取，以便补齐时无需改配置契约。
+启动时以及每小时执行 `ApplyRetention`：按保留天数删除过期事件（置顶引用的 event 除外）、指标、访问记录、旧 Run、旧 token 用量；事件 payload 超过 `ABP_EVENT_QUOTA_BYTES`（默认 5 GiB）时从最旧 `log.append` 开始删。`POST /api/v1/admin/maintenance/run` 跑同一套清理。设置项 `event_retention_days` / `access_retention_days` / `event_quota_bytes` 可覆盖环境变量。
 
 ### 13.8 备份
 
