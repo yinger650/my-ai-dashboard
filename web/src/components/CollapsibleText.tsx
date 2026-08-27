@@ -13,11 +13,12 @@ export function CollapsibleText({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const isTable = /\|.+\|\n\|[-: ]+\|/.test(text);
   const long = text.length > maxChars || text.split("\n").length > 5;
 
   return (
     <div className={cn("text-sm", className)}>
-      <div className={cn(!open && long && "line-clamp-4")}>
+      <div className={cn(!open && long && (isTable ? "max-h-28 overflow-auto" : "line-clamp-4"))}>
         <Markdown>{text}</Markdown>
       </div>
       {long && (

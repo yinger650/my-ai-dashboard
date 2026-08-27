@@ -15,9 +15,10 @@ storage:
   max_events: 50000
 
 intervals:
+  collect: 60s
   heartbeat: 30s
   metrics: 30s
-  ports: 1h
+  ports: 60s
   systemd: 60s
   cursor_agent: 5m
   http: 60s
@@ -36,6 +37,26 @@ collectors:
     exclude_interfaces: ["lo", "veth*", "docker*"]
   ports:
     enabled: true
+    promote:
+      - process: nginx
+        service_key: nginx
+        name: Nginx
+      - process: sshd
+        service_key: sshd
+        name: sshd
+      - process: board-server
+        service_key: board-server
+        name: Board Server
+  docker:
+    enabled: true
+  cron:
+    enabled: true
+  nginx:
+    enabled: true
+    config_paths:
+      - /etc/nginx
+      - /www/server/nginx/conf
+      - /www/server/panel/vhost/nginx
   systemd:
     enabled: true
     include_all: false
@@ -44,6 +65,8 @@ collectors:
       - board-client.service
       - nginx.service
       - sshd.service
+      - docker.service
+      - crond.service
     exclude_prefixes:
       - systemd-
       - user@

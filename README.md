@@ -5,7 +5,7 @@
 （[1.0 原稿](docs/archive/agentboard-personal-design-spec-v1.0.md)），包含：
 
 - **`board-server`**：单个 Go 进程，提供采集 API、管理后台 API、前端静态资源和后台清理。
-- **`board-client`**：运行在被监控 Linux 机器上的 Go 采集器，读取 `/proc` 指标并上报。
+- **`board-client`**：运行在被监控 Linux 机器上的 Go 采集器。Part 1 采集资源/端口/Docker/cron/nginx 快照，Part 2 Agent 整理后统一上报。
 - **`web`**：React + TypeScript + Vite + Tailwind 的响应式看板前端。
 
 > 本仓库当前实现的是设计规格 **1.1**：1.0 的 M1–M7 主链路，加上 Agent HTTP 上报、
@@ -129,6 +129,8 @@ make test-web
 | `ABP_DATA_DIR` | `/var/lib/agentboard` | 数据目录（DB、artifacts） |
 | `ABP_SECURE_COOKIES` | `true` | 生产必须 true（HTTPS）；本地 HTTP 置 false |
 | `ABP_PUBLIC_URL` | 必填（生产） | 对外 URL |
+| `ABP_EVENT_RETENTION_DAYS` | `30` | 事件/滚动日志最多保留一个月 |
+| `ABP_EVENT_QUOTA_BYTES` | `5 GiB` | 日志容量上限，超额删最旧滚动日志 |
 
 完整清单见 `internal/config/config.go`。
 
@@ -139,9 +141,9 @@ make test-web
 
 ## 实现范围
 
-**已实现（可端到端运行）：** SQLite + goose 迁移；管理员 Argon2id 密码 + 会话 + CSRF；TOTP（RFC 6238）与一次性恢复码；Machine/Service/Token CRUD 与一次性 Token；Event 采集（heartbeat/metric/service.state/status.upsert/log.append/log.pin/run.transition/`machine.service_snapshot`）、`event_id` 幂等、Machine Token 自动创建 Service、Run 状态机与非法转换拒绝、**service TTL 过期投影**；Artifact 上传/下载/图片预览与全局配额；Board / board.txt / Machine 详情 / Service 详情查询；访问日志与限流；Go 客户端真实 `/proc` 采集（CPU/内存/文件系统/磁盘 IO/网络/端口）+ systemd unit 快照 + **HTTP 网站探测** + Cursor Agent transcript 扫描与启发式日志总结 + SQLite spool + 批量发送/退避重试；**Cursor/Codex/OpenClaw HTTP 上报 skill + rule**；React 响应式看板（登录、Dashboard、机器详情、服务详情含附件与「生成日志总结」、访问记录、设置含 TOTP）；安全 Markdown 渲染；Go + 前端单元/集成测试。
+**已实现（可端到端运行）：** SQLite + goose 迁移；管理员 Argon2id 密码 + 会话 + CSRF；TOTP（RFC 6238）与一次性恢复码；Machine/Service/Token CRUD 与一次性 Token；Event 采集（heartbeat/metric/service.state/status.upsert/log.append/log.pin/run.transition/`machine.service_snapshot`）、`event_id` 幂等、Machine Token 自动创建 Service、Run 状态机与非法转换拒绝、**service TTL 过期投影**；Artifact 上传/下载/图片预览与全局配额；Board / board.txt / Machine 详情 / Service 详情查询；访问日志与限流；Go 客户端真实 `/proc` 采集（CPU/内存/文件系统/磁盘 IO/网络/端口）+ **两段式 host-inspect**（Docker / cron 日程与执行 / nginx 生效反代）+ systemd unit 快照 + **HTTP 网站探测** + Cursor Agent transcript 扫描与启发式日志总结 + SQLite spool + 批量发送/退避重试；**`GET /api/v1/machines/{id}/ports`**；**Cursor/Codex/OpenClaw HTTP 上报 skill + rule**；React 响应式看板（登录、Dashboard、机器详情含监听端口表、服务详情含附件与「生成日志总结」、访问记录、设置含 TOTP）；安全 Markdown 渲染；Go + 前端单元/集成测试。
 
-**尚未实现（规格 1.0 后续 / M8）：** Playwright E2E；Docker/Caddy 与备份恢复 CLI；`log_tasks` 与 Cursor Cloud Agents API 总结；指标时间桶；端口详情 API；Token 日配额；完整清理任务；改密 API。这些不影响当前 1.1 核心链路的运行。完整对照见 [设计规格 §0](docs/agentboard-personal-design-spec.md)。
+**尚未实现（规格 1.0 后续 / M8）：** Playwright E2E；Docker/Caddy 与备份恢复 CLI；通用 `log_tasks` 与 Cursor Cloud Agents API 总结；指标时间桶；Token 日配额；完整清理任务；改密 API。这些不影响当前 1.1 核心链路的运行。完整对照见 [设计规格 §0](docs/agentboard-personal-design-spec.md)。
 
 ## Agent 自行上报（Cursor / Codex / OpenClaw）
 

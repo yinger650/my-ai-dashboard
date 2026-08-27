@@ -21,6 +21,7 @@ type Config struct {
 	RawMetricRetention int
 	EventRetention     int
 	AccessRetention    int
+	EventQuotaBytes    int64
 	SessionHours       int
 	TrustedProxyCIDRs  []string
 	LogLevel           string
@@ -92,10 +93,13 @@ func Load() (*Config, error) {
 	if c.RawMetricRetention, err = getInt("ABP_RAW_METRIC_RETENTION_DAYS", 30); err != nil {
 		return nil, err
 	}
-	if c.EventRetention, err = getInt("ABP_EVENT_RETENTION_DAYS", 90); err != nil {
+	if c.EventRetention, err = getInt("ABP_EVENT_RETENTION_DAYS", 30); err != nil {
 		return nil, err
 	}
-	if c.AccessRetention, err = getInt("ABP_ACCESS_RETENTION_DAYS", 90); err != nil {
+	if c.AccessRetention, err = getInt("ABP_ACCESS_RETENTION_DAYS", 30); err != nil {
+		return nil, err
+	}
+	if c.EventQuotaBytes, err = getInt64("ABP_EVENT_QUOTA_BYTES", 5*1024*1024*1024); err != nil {
 		return nil, err
 	}
 	if c.SessionHours, err = getInt("ABP_SESSION_HOURS", 12); err != nil {

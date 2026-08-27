@@ -22,6 +22,18 @@ func scanMetric(sc interface{ Scan(...any) error }) (*MetricSample, error) {
 	return &m, nil
 }
 
+// LatestPortSnapshot returns the newest machine.port_snapshot payload.
+func (s *Store) LatestPortSnapshot(ctx context.Context, machineID string) (payload string, occurredAt string, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT payload_json, occurred_at FROM events
+		WHERE machine_id = ? AND event_type = 'machine.port_snapshot'
+		ORDER BY occurred_at DESC LIMIT 1`, machineID).Scan(&payload, &occurredAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrNotFound
+	}
+	return payload, occurredAt, err
+}
+
 // LatestMetric returns the most recent metric sample for a machine.
 func (s *Store) LatestMetric(ctx context.Context, machineID string) (*MetricSample, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+metricCols+` FROM metric_samples WHERE machine_id = ? ORDER BY occurred_at DESC LIMIT 1`, machineID)
@@ -108,26 +120,34 @@ func (s *Store) RecentMachineLogs(ctx context.Context, machineID string, limit i
 // ListMachineLogs returns log.append entries for a machine (all severities),
 // newest first, optionally before a cursor (occurred_at).
 func (s *Store) ListMachineLogs(ctx context.Context, machineID, beforeISO string, limit int) ([]LogEntry, error) {
+	return s.ListMachineLogsExcluding(ctx, machineID, beforeISO, limit, nil)
+}
+
+// ListMachineLogsExcluding is ListMachineLogs minus service_key / source values.
+func (s *Store) ListMachineLogsExcluding(ctx context.Context, machineID, beforeISO string, limit int, exclude []string) ([]LogEntry, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 30
 	}
-	var rows *sql.Rows
-	var err error
-	if beforeISO == "" {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
-			FROM events e
-			LEFT JOIN services sv ON sv.id = e.service_id
-			WHERE e.machine_id = ? AND e.event_type = 'log.append'
-			ORDER BY e.occurred_at DESC LIMIT ?`, machineID, limit)
-	} else {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
-			FROM events e
-			LEFT JOIN services sv ON sv.id = e.service_id
-			WHERE e.machine_id = ? AND e.event_type = 'log.append' AND e.occurred_at < ?
-			ORDER BY e.occurred_at DESC LIMIT ?`, machineID, beforeISO, limit)
+	where := `e.machine_id = ? AND e.event_type = 'log.append'`
+	args := []any{machineID}
+	if beforeISO != "" {
+		where += ` AND e.occurred_at < ?`
+		args = append(args, beforeISO)
 	}
+	for _, key := range exclude {
+		if key == "" {
+			continue
+		}
+		where += ` AND IFNULL(sv.service_key,'') != ? AND IFNULL(json_extract(e.payload_json, '$.source'), '') != ?`
+		args = append(args, key, key)
+	}
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
+		FROM events e
+		LEFT JOIN services sv ON sv.id = e.service_id
+		WHERE `+where+`
+		ORDER BY e.occurred_at DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}

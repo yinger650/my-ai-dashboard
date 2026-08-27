@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUp, Pin } from "lucide-react";
 import { apiGetPage } from "../api";
 import type { LogEntry, MachineLogsPage, PinnedLog } from "../types";
+import { compactCardPins, isCardNoiseLog } from "../lib/board-card";
 import { countNewLogs, mergeLogPages } from "../lib/logs";
 import { CollapsibleText } from "./CollapsibleText";
 import { SevDot } from "./Severity";
@@ -17,15 +18,19 @@ export function MachineLogStream({
   pollMs,
   initialLogs,
   initialPinned,
+  compact = false,
 }: {
   machineId: string;
   autoRefresh: boolean;
   pollMs: number;
   initialLogs: LogEntry[];
   initialPinned: PinnedLog[];
+  compact?: boolean;
 }) {
-  const [logs, setLogs] = useState<LogEntry[]>(initialLogs);
-  const [pinned, setPinned] = useState<PinnedLog[]>(initialPinned);
+  const filterLogs = (rows: LogEntry[]) => (compact ? rows.filter((l) => !isCardNoiseLog(l)) : rows);
+  const filterPins = (rows: PinnedLog[]) => (compact ? compactCardPins(rows) : rows);
+  const [logs, setLogs] = useState<LogEntry[]>(() => filterLogs(initialLogs));
+  const [pinned, setPinned] = useState<PinnedLog[]>(() => filterPins(initialPinned));
   const [cursor, setCursor] = useState<string | null>(
     initialLogs.length >= PAGE_SIZE ? initialLogs[initialLogs.length - 1]?.occurred_at ?? null : null,
   );
@@ -43,9 +48,10 @@ export function MachineLogStream({
 
   const fetchLatest = useCallback(
     async (opts: { jump?: boolean } = {}) => {
-      const page = await apiGetPage<MachineLogsPage>(`/api/v1/machines/${machineId}/logs`);
-      const incoming = page.data.logs ?? [];
-      if (page.data.pinned) setPinned(page.data.pinned);
+      const qs = compact ? "?exclude=cron" : "";
+      const page = await apiGetPage<MachineLogsPage>(`/api/v1/machines/${machineId}/logs${qs}`);
+      const incoming = filterLogs(page.data.logs ?? []);
+      if (page.data.pinned) setPinned(filterPins(page.data.pinned));
       const added = countNewLogs(incoming, logsRef.current);
       const merged = mergeLogPages(incoming, [...olderRef.current, ...logsRef.current]);
       const el = scrollRef.current;
@@ -74,13 +80,13 @@ export function MachineLogStream({
         setNewCount(0);
       }
     },
-    [machineId],
+    [machineId, compact],
   );
 
   useEffect(() => {
     olderRef.current = [];
-    setLogs(initialLogs);
-    setPinned(initialPinned);
+    setLogs(filterLogs(initialLogs));
+    setPinned(filterPins(initialPinned));
     setCursor(null);
     setHasMore(true);
     setNewCount(0);
@@ -101,9 +107,9 @@ export function MachineLogStream({
     setLoadingMore(true);
     try {
       const page = await apiGetPage<MachineLogsPage>(
-        `/api/v1/machines/${machineId}/logs?cursor=${encodeURIComponent(cursor)}`,
+        `/api/v1/machines/${machineId}/logs?cursor=${encodeURIComponent(cursor)}${compact ? "&exclude=cron" : ""}`,
       );
-      const incoming = page.data.logs ?? [];
+      const incoming = filterLogs(page.data.logs ?? []);
       olderRef.current = mergeLogPages(olderRef.current, incoming);
       setLogs((prev) => mergeLogPages(prev, incoming));
       setCursor(page.nextCursor);
@@ -112,7 +118,7 @@ export function MachineLogStream({
       loadingRef.current = false;
       setLoadingMore(false);
     }
-  }, [cursor, hasMore, machineId]);
+  }, [cursor, hasMore, machineId, compact]);
 
   function onScroll() {
     const el = scrollRef.current;
@@ -160,7 +166,7 @@ export function MachineLogStream({
                   {p.service_name && <span className="text-slate-500">· {p.service_name}</span>}
                   <span className="ml-auto text-slate-500">{localTime(p.occurred_at)}</span>
                 </div>
-                <CollapsibleText text={p.markdown} maxChars={180} />
+                <CollapsibleText text={p.markdown} maxChars={compact ? 400 : 180} />
               </div>
             ))}
           </div>

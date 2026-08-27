@@ -43,6 +43,7 @@ type Config struct {
 		MaxEvents int    `yaml:"max_events"`
 	} `yaml:"storage"`
 	Intervals struct {
+		Collect     Duration `yaml:"collect"`
 		Heartbeat   Duration `yaml:"heartbeat"`
 		Metrics     Duration `yaml:"metrics"`
 		Ports       Duration `yaml:"ports"`
@@ -66,8 +67,20 @@ type Config struct {
 			ExcludeInterfaces []string `yaml:"exclude_interfaces"`
 		} `yaml:"network"`
 		Ports struct {
-			Enabled bool `yaml:"enabled"`
+			Enabled bool          `yaml:"enabled"`
+			Promote []PromoteRule `yaml:"promote"`
 		} `yaml:"ports"`
+		Docker struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"docker"`
+		Cron struct {
+			Enabled  bool     `yaml:"enabled"`
+			LogPaths []string `yaml:"log_paths"`
+		} `yaml:"cron"`
+		Nginx struct {
+			Enabled     bool     `yaml:"enabled"`
+			ConfigPaths []string `yaml:"config_paths"`
+		} `yaml:"nginx"`
 		Systemd struct {
 			Enabled         bool     `yaml:"enabled"`
 			IncludeAll      bool     `yaml:"include_all"`
@@ -83,6 +96,13 @@ type Config struct {
 		} `yaml:"cursor_agent"`
 		HTTP HTTPCollector `yaml:"http"`
 	} `yaml:"collectors"`
+}
+
+// PromoteRule maps a listening process name to a Board daemon service.
+type PromoteRule struct {
+	Process    string `yaml:"process"`
+	ServiceKey string `yaml:"service_key"`
+	Name       string `yaml:"name"`
 }
 
 // HTTPCollector probes remote websites and reports each as a virtual service.
@@ -142,6 +162,9 @@ func (c *Config) applyDefaults() {
 	if c.Storage.MaxEvents == 0 {
 		c.Storage.MaxEvents = 50000
 	}
+	if c.Intervals.Collect.Duration == 0 {
+		c.Intervals.Collect.Duration = time.Minute
+	}
 	if c.Intervals.Heartbeat.Duration == 0 {
 		c.Intervals.Heartbeat.Duration = 30 * time.Second
 	}
@@ -149,7 +172,7 @@ func (c *Config) applyDefaults() {
 		c.Intervals.Metrics.Duration = 30 * time.Second
 	}
 	if c.Intervals.Ports.Duration == 0 {
-		c.Intervals.Ports.Duration = time.Hour
+		c.Intervals.Ports.Duration = time.Minute
 	}
 	if c.Intervals.Systemd.Duration == 0 {
 		c.Intervals.Systemd.Duration = time.Minute
@@ -196,7 +219,19 @@ func (c *Config) applyDefaults() {
 			"board-client.service",
 			"nginx.service",
 			"sshd.service",
+			"docker.service",
+			"crond.service",
 		}
+	}
+	if len(c.Collectors.Ports.Promote) == 0 {
+		c.Collectors.Ports.Promote = []PromoteRule{
+			{Process: "nginx", ServiceKey: "nginx", Name: "Nginx"},
+			{Process: "sshd", ServiceKey: "sshd", Name: "sshd"},
+			{Process: "board-server", ServiceKey: "board-server", Name: "Board Server"},
+		}
+	}
+	if len(c.Collectors.Nginx.ConfigPaths) == 0 {
+		c.Collectors.Nginx.ConfigPaths = []string{"/etc/nginx", "/www/server/nginx/conf"}
 	}
 	if len(c.Collectors.Systemd.ExcludePrefixes) == 0 {
 		c.Collectors.Systemd.ExcludePrefixes = []string{"systemd-", "user@", "getty@", "session-"}

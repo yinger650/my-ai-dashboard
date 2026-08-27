@@ -13,6 +13,7 @@ import {
 import { apiGet } from "../api";
 import type { Machine, MetricSample, Service } from "../types";
 import { HealthBadge, SevDot } from "../components/Severity";
+import { PortTable, type ListenPort } from "../components/PortTable";
 import { fmtBps, fmtBytes, fmtPct, localTime, relativeTime, usagePct } from "../format";
 
 interface MachineDetail {
@@ -41,6 +42,11 @@ export function MachineDetailPage() {
   const services = useQuery({
     queryKey: ["machine-services", machineId],
     queryFn: () => apiGet<Service[]>(`/api/v1/machines/${machineId}/services`),
+    refetchInterval: 15000,
+  });
+  const ports = useQuery({
+    queryKey: ["machine-ports", machineId],
+    queryFn: () => apiGet<{ ports: ListenPort[]; occurred_at: string | null }>(`/api/v1/machines/${machineId}/ports`),
     refetchInterval: 15000,
   });
 
@@ -112,6 +118,17 @@ export function MachineDetailPage() {
               <Area type="monotone" dataKey="mem" name="内存 %" stroke="#34d399" fillOpacity={0} strokeWidth={2} isAnimationActive={false} />
             </AreaChart>
           </ResponsiveContainer>
+        )}
+      </div>
+
+      <div className="card mb-6 p-4">
+        <h2 className="mb-3 font-medium">监听端口</h2>
+        {ports.isLoading ? (
+          <div className="py-6 text-center text-sm text-slate-500">加载中…</div>
+        ) : ports.error ? (
+          <div className="sev-error text-sm">加载失败：{(ports.error as Error).message}</div>
+        ) : (
+          <PortTable ports={ports.data?.ports} occurredAt={ports.data?.occurred_at} />
         )}
       </div>
 

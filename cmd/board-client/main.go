@@ -134,9 +134,10 @@ storage:
   max_events: 50000
 
 intervals:
+  collect: 60s
   heartbeat: 30s
   metrics: 30s
-  ports: 1h
+  ports: 60s
   systemd: 60s
   cursor_agent: 5m
   http: 60s
@@ -155,6 +156,15 @@ collectors:
     exclude_interfaces: ["lo", "veth*", "docker*"]
   ports:
     enabled: true
+  docker:
+    enabled: true
+  cron:
+    enabled: true
+  nginx:
+    enabled: true
+    config_paths:
+      - /etc/nginx
+      - /www/server/nginx/conf
   systemd:
     enabled: false
     include_all: false

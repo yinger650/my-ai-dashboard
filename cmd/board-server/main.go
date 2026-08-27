@@ -186,6 +186,30 @@ func runServer() error {
 	defer stop()
 
 	go func() {
+		runRetention := func() {
+			c, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			res, err := st.ApplyRetention(c, store.RetentionPolicy{
+				EventDays:  cfg.EventRetention,
+				MetricDays: cfg.RawMetricRetention,
+				AccessDays: cfg.AccessRetention,
+				QuotaBytes: cfg.EventQuotaBytes,
+			})
+			cancel()
+			if err != nil {
+				log.Warn("retention cleanup failed", "err", err)
+				return
+			}
+			if res.EventsDeleted+res.AccessDeleted+res.QuotaDeleted+res.ExpiredSessions > 0 {
+				log.Info("retention cleanup",
+					"sessions", res.ExpiredSessions,
+					"events", res.EventsDeleted,
+					"access", res.AccessDeleted,
+					"quota", res.QuotaDeleted,
+					"events_bytes", res.EventsBytes,
+				)
+			}
+		}
+		runRetention()
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
 		for {
@@ -193,14 +217,7 @@ func runServer() error {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				c, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				n, err := st.DeleteExpiredSessions(c)
-				cancel()
-				if err != nil {
-					log.Warn("session cleanup failed", "err", err)
-				} else if n > 0 {
-					log.Info("expired sessions deleted", "count", n)
-				}
+				runRetention()
 			}
 		}
 	}()

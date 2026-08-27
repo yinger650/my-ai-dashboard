@@ -1,34 +1,37 @@
 package collector
 
 import (
-	"context"
-	"os/exec"
 	"strconv"
 	"strings"
-	"time"
+
+	"agentboard/internal/client/hostsnap"
 )
 
-// Port describes one listening socket.
-type Port struct {
-	Protocol string `json:"protocol"`
-	Address  string `json:"address"`
-	Port     int    `json:"port"`
-	PID      int    `json:"pid,omitempty"`
-	Process  string `json:"process,omitempty"`
-}
+// Port is an alias for the snapshot listening socket type.
+type Port = hostsnap.Port
 
 // ReadPorts returns listening ports via `ss -H -lntup`. It never uses a shell.
 // If ss is unavailable it returns (nil, false).
 func ReadPorts() ([]Port, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "ss", "-H", "-lntup")
-	out, err := cmd.Output()
+	return ReadPortsCmd(DefaultCommander)
+}
+
+// ReadPortsCmd is ReadPorts with an injectable commander.
+func ReadPortsCmd(run Commander) ([]Port, bool) {
+	if run == nil {
+		run = DefaultCommander
+	}
+	out, err := run("ss", "-H", "-lntup")
 	if err != nil {
 		return nil, false
 	}
+	return ParseSS(string(out)), true
+}
+
+// ParseSS parses `ss -H -lntup` output.
+func ParseSS(output string) []Port {
 	var ports []Port
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 5 {
 			continue
@@ -46,7 +49,7 @@ func ReadPorts() ([]Port, bool) {
 		}
 		ports = append(ports, entry)
 	}
-	return ports, true
+	return ports
 }
 
 func splitHostPort(s string) (host, port string) {
