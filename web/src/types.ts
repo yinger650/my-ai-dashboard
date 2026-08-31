@@ -34,6 +34,19 @@ export interface BoardService {
   state_summary: string;
   severity: string;
   last_seen_at: string | null;
+  running_count?: number;
+}
+
+export interface ActiveRun {
+  id: string;
+  service_id: string;
+  service_key: string;
+  service_name: string;
+  run_key: string;
+  status: string;
+  summary: string;
+  started_at: string | null;
+  created_at: string;
 }
 
 export interface ServiceCounts {
@@ -55,11 +68,13 @@ export interface BoardMachine {
   os: string | null;
   arch: string | null;
   latest_metric: MetricSample | null;
+  heartbeat_metrics?: Record<string, number> | null;
   service_counts: ServiceCounts;
   services: BoardService[] | null;
   statuses: StatusItem[] | null;
   pinned_logs: PinnedLog[] | null;
   recent_logs: LogEntry[] | null;
+  active_runs?: ActiveRun[] | null;
 }
 
 export interface Board {

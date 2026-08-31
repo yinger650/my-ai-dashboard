@@ -37,6 +37,7 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 		statuses, _ := s.st.ListStatusesByMachine(ctx, m.ID)
 		pinned, _ := s.st.ListPinnedLogsByMachine(ctx, m.ID)
 		recent, _ := s.st.ListMachineLogsExcluding(ctx, m.ID, "", 20, []string{"cron"})
+		activeRuns, _ := s.st.ListActiveRunsByMachine(ctx, m.ID)
 
 		if svcs == nil {
 			svcs = []*store.Service{}
@@ -49,6 +50,13 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 		}
 		if recent == nil {
 			recent = []store.LogEntry{}
+		}
+		if activeRuns == nil {
+			activeRuns = []store.ActiveRun{}
+		}
+		runCounts := map[string]int{}
+		for _, ar := range activeRuns {
+			runCounts[ar.ServiceID]++
 		}
 
 		services := make([]map[string]any, 0, len(svcs))
@@ -65,6 +73,7 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 				"state_summary": svc.StateSummary,
 				"severity":      svc.Severity,
 				"last_seen_at":  svc.LastSeenAt,
+				"running_count": runCounts[svc.ID],
 			})
 		}
 
@@ -79,11 +88,13 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 			"os":                m.OS,
 			"arch":              m.Arch,
 			"latest_metric":     latest,
+			"heartbeat_metrics": store.ParseHeartbeatMetrics(m.MetadataJSON),
 			"service_counts":    counts,
 			"services":          services,
 			"statuses":          statuses,
 			"pinned_logs":       cardPins(pinned),
 			"recent_logs":       cardRecentLogs(recent, 20),
+			"active_runs":       activeRuns,
 		})
 	}
 	return out, nil
@@ -141,16 +152,20 @@ func (s *Server) handleBoardTxt(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&b, "[%s] %-20s %s\n", label, m.Name, metricSummary(latest, m, now))
 		counts, _ := s.st.ServiceSeverityCounts(r.Context(), m.ID)
 		fmt.Fprintf(&b, "  services: %d normal, %d warning, %d error\n", counts["normal"], counts["warning"], counts["error"])
-		statuses, _ := s.st.ListStatusesByMachine(r.Context(), m.ID)
-		if len(statuses) > 0 {
-			parts := make([]string, 0, len(statuses))
-			for _, st := range statuses {
-				name := st.ServiceKey
-				if name == "" {
-					name = st.ServiceName
+		activeRuns, _ := s.st.ListActiveRunsByMachine(r.Context(), m.ID)
+		if len(activeRuns) > 0 {
+			parts := make([]string, 0, len(activeRuns))
+			for _, ar := range activeRuns {
+				label := ar.Summary
+				if label == "" {
+					label = ar.Status
 				}
-				parts = append(parts, fmt.Sprintf("%s %s=%s", name, st.Label, statusValueText(st)))
+				parts = append(parts, fmt.Sprintf("%s %s", ar.ServiceName, oneLine(label)))
 			}
+			fmt.Fprintf(&b, "  running %d: %s\n", len(activeRuns), strings.Join(parts, "  |  "))
+		}
+		statuses, _ := s.st.ListStatusesByMachine(r.Context(), m.ID)
+		if parts := textBoardStatusParts(statuses); len(parts) > 0 {
 			fmt.Fprintf(&b, "  status: %s\n", strings.Join(parts, "  "))
 		}
 		pinned, _ := s.st.ListPinnedLogsByMachine(r.Context(), m.ID)
@@ -199,6 +214,32 @@ func cardPins(pins []store.PinnedLog) []store.PinnedLog {
 		}
 	}
 	return out
+}
+
+var telemetryStatusKeys = map[string]struct{}{
+	"alive": {}, "provider": {}, "last_heartbeat": {},
+}
+
+func keepTextBoardStatus(st store.CurrentStatus) bool {
+	if _, skip := telemetryStatusKeys[st.StatusKey]; skip {
+		return false
+	}
+	return st.Severity == "warning" || st.Severity == "error"
+}
+
+func textBoardStatusParts(statuses []store.CurrentStatus) []string {
+	parts := make([]string, 0, len(statuses))
+	for _, st := range statuses {
+		if !keepTextBoardStatus(st) {
+			continue
+		}
+		name := st.ServiceKey
+		if name == "" {
+			name = st.ServiceName
+		}
+		parts = append(parts, fmt.Sprintf("%s %s=%s", name, st.Label, statusValueText(st)))
+	}
+	return parts
 }
 
 func statusValueText(st store.CurrentStatus) string {

@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { StatusList } from "./StatusList";
 import type { BoardService, StatusItem } from "../types";
 
@@ -43,15 +43,32 @@ const statuses: StatusItem[] = [
 ];
 
 describe("StatusList compact", () => {
-  it("shows service summaries and hides listen statuses / duplicate units", () => {
+  it("hides summaries and listen statuses; shows a red badge for log counts", () => {
     render(
       <MemoryRouter>
-        <StatusList services={services} statuses={statuses} compact />
+        <StatusList
+          services={services}
+          statuses={statuses}
+          compact
+          newLogCounts={{ "s-nginx": 3 }}
+        />
       </MemoryRouter>,
     );
     expect(screen.getByText("Nginx")).toBeInTheDocument();
-    expect(screen.getByText("2 条生效反代")).toBeInTheDocument();
+    expect(screen.queryByText("2 条生效反代")).not.toBeInTheDocument();
     expect(screen.queryByText("nginx.service")).not.toBeInTheDocument();
     expect(screen.queryByText("监听 80")).not.toBeInTheDocument();
+    expect(screen.getByTitle("3 条日志")).toHaveTextContent("3");
+  });
+
+  it("marks a service as opened when its name is clicked", () => {
+    const onOpenService = vi.fn();
+    render(
+      <MemoryRouter>
+        <StatusList services={services} statuses={[]} compact newLogCounts={{ "s-nginx": 3 }} onOpenService={onOpenService} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByText("Nginx"));
+    expect(onOpenService).toHaveBeenCalledWith("s-nginx", "nginx");
   });
 });

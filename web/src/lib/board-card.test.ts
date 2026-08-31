@@ -25,6 +25,22 @@ describe("compactCardServices", () => {
     ]);
     expect(rows.map((s) => s.service_key)).toEqual(["nginx", "docker", "cursor-agent"]);
   });
+
+  it("on host machines hides leftover .service keys that stopped reporting", () => {
+    const seen = "2026-08-27T11:38:00.000Z";
+    const rows = compactCardServices(
+      [
+        { ...svc("board-client", "Board Client"), last_seen_at: seen },
+        {
+          ...svc("board-client.service", "AgentBoard Personal board-client"),
+          last_seen_at: "2026-08-26T14:20:38.000Z",
+        },
+        { ...svc("docker", "Docker"), current_state: "unknown", last_seen_at: seen },
+      ],
+      { kind: "vm", machineLastSeenAt: seen },
+    );
+    expect(rows.map((s) => s.service_key)).toEqual(["board-client"]);
+  });
 });
 
 describe("card log filters", () => {

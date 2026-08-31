@@ -161,11 +161,12 @@ make test-web
 | Codex / Cloud Agent | `AGENTS.md` |
 | 适配说明 | `skills/agentboard-report/adapters/` |
 
+本仓库把 Machine Token 写在根目录 `.env`（已 gitignore，可参考 `.env.example`）。`report.py` 会自动读取。
+
 ```bash
-export AGENTBOARD_URL=https://board.yinger650.com
-export AGENTBOARD_TOKEN=abp_m_...          # Machine Token；不要提交 git
 export AGENTBOARD_PROVIDER=cursor          # cursor | codex | openclaw
-python3 skills/agentboard-report/scripts/report.py start "一句话任务目标"
+python3 skills/agentboard-report/scripts/report.py start "一句话：正在做什么"
+python3 skills/agentboard-report/scripts/report.py succeed "已完成：结果摘要"
 ```
 
-未设置 `AGENTBOARD_TOKEN` 时脚本静默跳过，不得中断用户任务。生产 token 写在服务器 `/etc/agentboard/agent-ingest.env`（不入库）。
+未设置 `AGENTBOARD_TOKEN` 时脚本静默跳过，不得中断用户任务。本机 `board-client` 用自己的 token 报物理机，不能代替本 skill 的 token。不要把 `.env` 提交进 git。

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -53,9 +54,20 @@ func TestIngestProjectionsAndDuplicates(t *testing.T) {
 	now := shared.FormatTime(shared.NowUTC())
 
 	// heartbeat
-	res, err := st.IngestEvent(ctx, mkEnv(t, event.TypeHeartbeat, "", "", event.Heartbeat{Hostname: "h", OS: "linux", Arch: "amd64", HeartbeatIntervalSeconds: 30}), auth, now)
+	res, err := st.IngestEvent(ctx, mkEnv(t, event.TypeHeartbeat, "", "", event.Heartbeat{
+		Hostname: "h", OS: "linux", Arch: "amd64", HeartbeatIntervalSeconds: 30,
+		Metadata: map[string]any{"gpu_mem": 72.5, "gpu_util": 40, "role": "worker"},
+	}), auth, now)
 	if err != nil || res.Status != "accepted" {
 		t.Fatalf("heartbeat: %v %+v", err, res)
+	}
+	gotM, err := st.GetMachineByID(ctx, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics := ParseHeartbeatMetrics(gotM.MetadataJSON)
+	if metrics["gpu_mem"] != 72.5 || metrics["gpu_util"] != 40 {
+		t.Fatalf("heartbeat metrics = %#v json=%s", metrics, gotM.MetadataJSON)
 	}
 
 	// metric
@@ -273,5 +285,99 @@ func TestListMachineLogsExcludingCron(t *testing.T) {
 	kept, err := st.ListMachineLogsExcluding(ctx, m.ID, "", 20, []string{"cron"})
 	if err != nil || len(kept) != 1 || kept[0].Markdown != "nginx restart" {
 		t.Fatalf("exclude cron: %v %+v", err, kept)
+	}
+}
+
+func TestEmptyServiceStateSummaryPreserved(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	m := &Machine{MachineKey: "sumbox", Name: "S", Kind: "vm", Enabled: true, AutoCreateServices: true}
+	_ = st.CreateMachine(ctx, m)
+	auth := IngestAuth{MachineID: m.ID, AutoCreateServices: true}
+	now := shared.FormatTime(shared.NowUTC())
+
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeServiceState, "cursor", "", event.ServiceState{
+		Name: "Cursor", Type: "agent", State: "running", Summary: "实现 M7", Severity: "normal",
+	}), auth, now); err != nil || r.Status != "accepted" {
+		t.Fatalf("seed: %v %+v", err, r)
+	}
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeServiceState, "cursor", "", event.ServiceState{
+		Name: "Cursor", Type: "agent", State: "running", Summary: "", Severity: "normal",
+	}), auth, now); err != nil || r.Status != "accepted" {
+		t.Fatalf("empty: %v %+v", err, r)
+	}
+	svc, err := st.GetServiceByKey(ctx, m.ID, "cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.StateSummary != "实现 M7" {
+		t.Fatalf("summary overwritten: %q", svc.StateSummary)
+	}
+}
+
+func TestActiveRunSummaryAndLogRunID(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	m := &Machine{MachineKey: "runbox", Name: "R", Kind: "vm", Enabled: true, AutoCreateServices: true}
+	_ = st.CreateMachine(ctx, m)
+	auth := IngestAuth{MachineID: m.ID, AutoCreateServices: true}
+	now := shared.FormatTime(shared.NowUTC())
+
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeServiceState, "cursor", "", event.ServiceState{
+		Name: "Cursor", Type: "agent", State: "running", Summary: "seed", Severity: "normal",
+	}), auth, now); err != nil || r.Status != "accepted" {
+		t.Fatalf("state: %v %+v", err, r)
+	}
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeRunTransition, "cursor", "conv-1", event.RunTransition{
+		ServiceName: "Cursor", ServiceType: "agent", Status: "running", Summary: "实现 M7",
+	}), auth, now); err != nil || r.Status != "accepted" {
+		t.Fatalf("run1: %v %+v", err, r)
+	}
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeRunTransition, "cursor", "conv-2", event.RunTransition{
+		ServiceName: "Cursor", ServiceType: "agent", Status: "running", Summary: "修 TTL",
+	}), auth, now); err != nil || r.Status != "accepted" {
+		t.Fatalf("run2: %v %+v", err, r)
+	}
+	svc, _ := st.GetServiceByKey(ctx, m.ID, "cursor")
+	if !strings.Contains(svc.StateSummary, "2 进行中") || !strings.Contains(svc.StateSummary, "实现 M7") {
+		t.Fatalf("active summary: %q", svc.StateSummary)
+	}
+	active, err := st.ListActiveRunsByMachine(ctx, m.ID)
+	if err != nil || len(active) != 2 {
+		t.Fatalf("active runs: %v %+v", err, active)
+	}
+
+	logEnv := mkEnv(t, event.TypeLogAppend, "cursor", "conv-1", event.LogPayload{Markdown: "开始", Severity: "info", Source: "cursor"})
+	if r, err := st.IngestEvent(ctx, logEnv, auth, now); err != nil || r.Status != "accepted" {
+		t.Fatalf("log: %v %+v", err, r)
+	}
+	var runID sql.NullString
+	if err := st.db.QueryRowContext(ctx, `SELECT run_id FROM events WHERE event_id = ?`, logEnv.EventID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if !runID.Valid || runID.String == "" {
+		t.Fatal("log.append not bound to run_id")
+	}
+
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeRunTransition, "cursor", "conv-1", event.RunTransition{
+		ServiceName: "Cursor", ServiceType: "agent", Status: "succeeded", Summary: "已完成 M7",
+	}), auth, now); err != nil || r.Status != "accepted" {
+		t.Fatalf("succeed: %v %+v", err, r)
+	}
+	svc, _ = st.GetServiceByKey(ctx, m.ID, "cursor")
+	if !strings.Contains(svc.StateSummary, "1 进行中") || !strings.Contains(svc.StateSummary, "修 TTL") {
+		t.Fatalf("after succeed: %q", svc.StateSummary)
+	}
+	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeRunTransition, "cursor", "conv-2", event.RunTransition{
+		ServiceName: "Cursor", ServiceType: "agent", Status: "failed", Summary: "TTL 失败",
+	}), auth, now); err != nil || r.Status != "accepted" {
+		t.Fatalf("fail: %v %+v", err, r)
+	}
+	svc, _ = st.GetServiceByKey(ctx, m.ID, "cursor")
+	if !strings.HasPrefix(svc.StateSummary, "空闲") {
+		t.Fatalf("want idle summary, got %q", svc.StateSummary)
+	}
+	if svc.CurrentState == "failed" {
+		t.Fatalf("service should stay running, got %s", svc.CurrentState)
 	}
 }

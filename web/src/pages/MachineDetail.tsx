@@ -11,16 +11,26 @@ import {
   YAxis,
 } from "recharts";
 import { apiGet } from "../api";
-import type { Machine, MetricSample, Service } from "../types";
+import type { ActiveRun, Machine, MetricSample, Service, StatusItem } from "../types";
 import { HealthBadge, SevDot } from "../components/Severity";
-import { PortTable, type ListenPort } from "../components/PortTable";
-import { fmtBps, fmtBytes, fmtPct, localTime, relativeTime, usagePct } from "../format";
+import { fmtBps, localTime, relativeTime, usagePct } from "../format";
+import { describeServiceFunction, describeServiceStatus } from "../lib/service-brief";
+import { collectPercentMetrics, hasNetworkSample } from "../lib/board-metrics";
+import { userFacingStatuses } from "../lib/status-filter";
+import { PercentMetricGrid } from "../components/PercentMetricGrid";
+import { StatusLines } from "../components/StatusLines";
+import { ActiveRunsList } from "../components/ActiveRunsList";
+import { visibleHostServices } from "../lib/host-services";
+import { markServiceLogsSeen } from "../lib/log-seen";
 
 interface MachineDetail {
   machine: Machine;
   latest_metric: MetricSample | null;
   health: string;
   resource_severity: string;
+  heartbeat_metrics?: Record<string, number> | null;
+  statuses?: StatusItem[] | null;
+  active_runs?: ActiveRun[] | null;
 }
 
 const RANGES = ["1h", "6h", "24h", "7d", "30d"];
@@ -44,17 +54,23 @@ export function MachineDetailPage() {
     queryFn: () => apiGet<Service[]>(`/api/v1/machines/${machineId}/services`),
     refetchInterval: 15000,
   });
-  const ports = useQuery({
-    queryKey: ["machine-ports", machineId],
-    queryFn: () => apiGet<{ ports: ListenPort[]; occurred_at: string | null }>(`/api/v1/machines/${machineId}/ports`),
-    refetchInterval: 15000,
-  });
 
   if (detail.isLoading) return <div className="text-slate-400">加载中…</div>;
   if (detail.error) return <div className="sev-error">加载失败：{(detail.error as Error).message}</div>;
 
   const m = detail.data!.machine;
   const lm = detail.data!.latest_metric;
+  const percents = collectPercentMetrics({
+    latest_metric: lm,
+    heartbeat_metrics: detail.data!.heartbeat_metrics,
+    statuses: detail.data!.statuses,
+  });
+  const lines = userFacingStatuses(detail.data!.statuses, "machine");
+  const showNet = hasNetworkSample(lm);
+  const visibleServices = visibleHostServices(services.data ?? [], {
+    kind: m.kind,
+    machineLastSeenAt: m.last_seen_at,
+  });
   const chart = (metrics.data?.samples ?? []).map((s) => ({
     t: new Date(s.occurred_at).toLocaleTimeString(),
     cpu: s.cpu_percent,
@@ -77,31 +93,44 @@ export function MachineDetailPage() {
         </div>
       </div>
 
-      <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat label="CPU" value={fmtPct(lm?.cpu_percent ?? null)} />
-        <Stat label="内存" value={fmtPct(usagePct(lm?.memory_used_bytes ?? null, lm?.memory_total_bytes ?? null))} sub={`${fmtBytes(lm?.memory_used_bytes ?? null)} / ${fmtBytes(lm?.memory_total_bytes ?? null)}`} />
-        <Stat label="根磁盘" value={fmtPct(usagePct(lm?.root_disk_used_bytes ?? null, lm?.root_disk_total_bytes ?? null))} sub={`${fmtBytes(lm?.root_disk_used_bytes ?? null)} / ${fmtBytes(lm?.root_disk_total_bytes ?? null)}`} />
-        <Stat label="网络" value={`↓${fmtBps(lm?.network_rx_bps ?? null)}`} sub={`↑${fmtBps(lm?.network_tx_bps ?? null)}`} />
-      </div>
-
-      <div className="card mb-6 p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-medium">指标趋势</h2>
-          <div className="flex gap-1">
-            {RANGES.map((rr) => (
-              <button
-                key={rr}
-                onClick={() => setRange(rr)}
-                className={`rounded px-2 py-1 text-xs ${range === rr ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"}`}
-              >
-                {rr}
-              </button>
-            ))}
-          </div>
+      {(percents.length > 0 || showNet) && (
+        <div className="mb-4">
+          <PercentMetricGrid metrics={percents} />
+          {showNet && (
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Stat label="网络" value={`↓${fmtBps(lm?.network_rx_bps ?? null)}`} sub={`↑${fmtBps(lm?.network_tx_bps ?? null)}`} />
+            </div>
+          )}
         </div>
-        {chart.length === 0 ? (
-          <div className="flex h-52 items-center justify-center text-slate-500">该区间暂无数据</div>
-        ) : (
+      )}
+      {lines.length > 0 && (
+        <div className="card mb-4 p-4">
+          <h2 className="mb-2 text-sm font-medium text-slate-400">状态</h2>
+          <StatusLines statuses={lines} />
+        </div>
+      )}
+      {(detail.data!.active_runs ?? []).length > 0 && (
+        <div className="card mb-4 p-4">
+          <ActiveRunsList runs={detail.data!.active_runs ?? []} />
+        </div>
+      )}
+
+      {chart.length > 0 && (
+        <div className="card mb-6 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-medium">指标趋势</h2>
+            <div className="flex gap-1">
+              {RANGES.map((rr) => (
+                <button
+                  key={rr}
+                  onClick={() => setRange(rr)}
+                  className={`rounded px-2 py-1 text-xs ${range === rr ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400"}`}
+                >
+                  {rr}
+                </button>
+              ))}
+            </div>
+          </div>
           <ResponsiveContainer width="100%" height={240}>
             <AreaChart data={chart}>
               <defs>
@@ -118,33 +147,34 @@ export function MachineDetailPage() {
               <Area type="monotone" dataKey="mem" name="内存 %" stroke="#34d399" fillOpacity={0} strokeWidth={2} isAnimationActive={false} />
             </AreaChart>
           </ResponsiveContainer>
-        )}
-      </div>
-
-      <div className="card mb-6 p-4">
-        <h2 className="mb-3 font-medium">监听端口</h2>
-        {ports.isLoading ? (
-          <div className="py-6 text-center text-sm text-slate-500">加载中…</div>
-        ) : ports.error ? (
-          <div className="sev-error text-sm">加载失败：{(ports.error as Error).message}</div>
-        ) : (
-          <PortTable ports={ports.data?.ports} occurredAt={ports.data?.occurred_at} />
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="card p-4">
-        <h2 className="mb-3 font-medium">服务 ({services.data?.length ?? 0})</h2>
+        <h2 className="mb-3 font-medium">服务 ({visibleServices.length})</h2>
         <div className="divide-y divide-slate-800">
-          {(services.data ?? []).map((s) => (
-            <Link key={s.id} to={`/services/${s.id}`} className="flex items-center gap-3 py-2 hover:bg-slate-800/40">
-              <SevDot severity={s.severity} />
-              <span className="font-medium">{s.name}</span>
-              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">{s.type}</span>
-              <span className="text-sm text-slate-400">{s.state_summary || s.current_state}</span>
-              <span className="ml-auto text-xs text-slate-500">{localTime(s.last_seen_at)}</span>
+          {visibleServices.map((s) => (
+            <Link
+              key={s.id}
+              to={`/services/${s.id}`}
+              onClick={() => markServiceLogsSeen([s.id, s.service_key])}
+              className="flex items-start gap-3 py-2.5 hover:bg-slate-800/40"
+            >
+              <span className="mt-1.5 inline-flex">
+                <SevDot severity={s.severity} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{s.name}</span>
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">{s.type}</span>
+                  <span className="ml-auto text-xs text-slate-500">{localTime(s.last_seen_at)}</span>
+                </div>
+                <p className="mt-0.5 text-xs leading-relaxed text-slate-400">{describeServiceFunction(s)}</p>
+                <p className={`text-xs sev-${s.severity}`}>{describeServiceStatus(s)}</p>
+              </div>
             </Link>
           ))}
-          {(services.data ?? []).length === 0 && <div className="py-4 text-slate-500">暂无服务</div>}
+          {visibleServices.length === 0 && <div className="py-4 text-slate-500">暂无服务</div>}
         </div>
       </div>
     </div>

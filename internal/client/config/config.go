@@ -3,8 +3,10 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -50,6 +52,9 @@ type Config struct {
 		Systemd     Duration `yaml:"systemd"`
 		CursorAgent Duration `yaml:"cursor_agent"`
 		HTTP        Duration `yaml:"http"`
+		Probe       Duration `yaml:"probe"`
+		AISummary   Duration `yaml:"ai_summary"`
+		AIDiscover  Duration `yaml:"ai_discover"`
 	} `yaml:"intervals"`
 	Collectors struct {
 		CPU         bool `yaml:"cpu"`
@@ -94,8 +99,15 @@ type Config struct {
 			PinSummary  bool     `yaml:"pin_summary"`
 			Paths       []string `yaml:"paths"`
 		} `yaml:"cursor_agent"`
-		HTTP HTTPCollector `yaml:"http"`
+		HTTP   HTTPCollector   `yaml:"http"`
+		Probes ProbesCollector `yaml:"probes"`
 	} `yaml:"collectors"`
+	LocalIngest struct {
+		Enabled       *bool  `yaml:"enabled"`
+		Listen        string `yaml:"listen"`
+		AdvertisePath string `yaml:"advertise_path"`
+	} `yaml:"local_ingest"`
+	AI AIConfig `yaml:"ai"`
 }
 
 // PromoteRule maps a listening process name to a Board daemon service.
@@ -125,6 +137,71 @@ type HTTPTarget struct {
 	ExpectContains string            `yaml:"expect_contains"`
 	Headers        map[string]string `yaml:"headers"`
 	TLSInsecure    bool              `yaml:"tls_insecure_skip_verify"`
+}
+
+// ProbesCollector runs user YAML-declared scripts.
+type ProbesCollector struct {
+	Enabled bool          `yaml:"enabled"`
+	Scripts []ProbeScript `yaml:"scripts"`
+}
+
+// ProbeScript is one local probe.
+type ProbeScript struct {
+	ServiceKey string   `yaml:"service_key"`
+	Name       string   `yaml:"name"`
+	Command    []string `yaml:"command"`
+	Interval   Duration `yaml:"interval"`
+	Timeout    Duration `yaml:"timeout"`
+	Format     string   `yaml:"format"`
+	TTLSeconds int      `yaml:"ttl_seconds"`
+	MaxBytes   int      `yaml:"max_bytes"`
+	AppendLog  *bool    `yaml:"append_log"`
+}
+
+// AIConfig is the local coding-agent CLI integration (spec 14.9).
+type AIConfig struct {
+	Enabled           bool          `yaml:"enabled"`
+	Provider          string        `yaml:"provider"`
+	APIKeyEnv         string        `yaml:"api_key_env"`
+	Workspace         string        `yaml:"workspace"`
+	Command           []string      `yaml:"command"`
+	Model             string        `yaml:"model"`
+	Timeout           Duration      `yaml:"timeout"`
+	MaxCallsPerDay    int           `yaml:"max_calls_per_day"`
+	MaxInputBytes     int           `yaml:"max_input_bytes"`
+	MaxOutputRunes    int           `yaml:"max_output_runes"`
+	FallbackHeuristic *bool         `yaml:"fallback_heuristic"`
+	Summarize         []AISummarize `yaml:"summarize"`
+	Discover          AIDiscover    `yaml:"discover"`
+}
+
+// AISummarize is one log-summary source.
+type AISummarize struct {
+	Source     string   `yaml:"source"`
+	ServiceKey string   `yaml:"service_key"`
+	Name       string   `yaml:"name"`
+	Interval   Duration `yaml:"interval"`
+	MinNewLogs int      `yaml:"min_new_logs"`
+	Prompt     string   `yaml:"prompt"`
+}
+
+// AIDiscover is the two-round host inspection.
+type AIDiscover struct {
+	Enabled           bool       `yaml:"enabled"`
+	ServiceKey        string     `yaml:"service_key"`
+	Name              string     `yaml:"name"`
+	Interval          Duration   `yaml:"interval"`
+	TTLSeconds        int        `yaml:"ttl_seconds"`
+	MaxInvestigations int        `yaml:"max_investigations"`
+	Prompt            string     `yaml:"prompt"`
+	AllowCommands     []AllowCmd `yaml:"allow_commands"`
+}
+
+// AllowCmd is a whitelist command template for AI inspect round 2.
+type AllowCmd struct {
+	ID         string   `yaml:"id"`
+	Argv       []string `yaml:"argv"`
+	AllowPaths []string `yaml:"allow_paths"`
 }
 
 var machineKeyRe = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
@@ -182,6 +259,91 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Intervals.HTTP.Duration == 0 {
 		c.Intervals.HTTP.Duration = time.Minute
+	}
+	if c.Intervals.Probe.Duration == 0 {
+		c.Intervals.Probe.Duration = time.Minute
+	}
+	if c.Intervals.AISummary.Duration == 0 {
+		c.Intervals.AISummary.Duration = 15 * time.Minute
+	}
+	if c.Intervals.AIDiscover.Duration == 0 {
+		c.Intervals.AIDiscover.Duration = 6 * time.Hour
+	}
+	if c.AI.Provider == "" {
+		c.AI.Provider = "cursor-agent"
+	}
+	if c.AI.APIKeyEnv == "" {
+		c.AI.APIKeyEnv = "CURSOR_API_KEY"
+	}
+	if c.AI.Workspace == "" {
+		dir := "/var/lib/agentboard-client/ai-workspace"
+		if c.Storage.SpoolPath != "" {
+			dir = filepath.Join(filepath.Dir(c.Storage.SpoolPath), "ai-workspace")
+		}
+		c.AI.Workspace = dir
+	}
+	if c.AI.Timeout.Duration == 0 {
+		c.AI.Timeout.Duration = 120 * time.Second
+	}
+	if c.AI.MaxCallsPerDay == 0 {
+		c.AI.MaxCallsPerDay = 48
+	}
+	if c.AI.MaxInputBytes == 0 {
+		c.AI.MaxInputBytes = 32 * 1024
+	}
+	if c.AI.MaxOutputRunes == 0 {
+		c.AI.MaxOutputRunes = 3000
+	}
+	if c.AI.Discover.ServiceKey == "" {
+		c.AI.Discover.ServiceKey = "ai-inspect"
+	}
+	if c.AI.Discover.Name == "" {
+		c.AI.Discover.Name = "AI 主机巡检"
+	}
+	if c.AI.Discover.Interval.Duration == 0 {
+		c.AI.Discover.Interval = c.Intervals.AIDiscover
+	}
+	if c.AI.Discover.TTLSeconds == 0 {
+		c.AI.Discover.TTLSeconds = 43200
+	}
+	if c.AI.Discover.MaxInvestigations == 0 {
+		c.AI.Discover.MaxInvestigations = 8
+	}
+	for i := range c.AI.Summarize {
+		s := &c.AI.Summarize[i]
+		if s.Source == "" {
+			s.Source = "agent_logs"
+		}
+		if s.ServiceKey == "" {
+			s.ServiceKey = "ai-agent-digest"
+		}
+		if s.Name == "" {
+			s.Name = "Agent 日志总结"
+		}
+		if s.Interval.Duration == 0 {
+			s.Interval = c.Intervals.AISummary
+		}
+		if s.MinNewLogs == 0 {
+			s.MinNewLogs = 3
+		}
+	}
+	for i := range c.Collectors.Probes.Scripts {
+		s := &c.Collectors.Probes.Scripts[i]
+		if s.Format == "" {
+			s.Format = "json"
+		}
+		if s.Interval.Duration == 0 {
+			s.Interval = c.Intervals.Probe
+		}
+		if s.Timeout.Duration == 0 {
+			s.Timeout.Duration = 15 * time.Second
+		}
+		if s.TTLSeconds == 0 {
+			s.TTLSeconds = 180
+		}
+		if s.Name == "" {
+			s.Name = s.ServiceKey
+		}
 	}
 	if c.Collectors.HTTP.Timeout.Duration == 0 {
 		c.Collectors.HTTP.Timeout.Duration = 10 * time.Second
@@ -248,6 +410,16 @@ func (c *Config) applyDefaults() {
 			"/root/.cursor-server",
 		}
 	}
+	if c.LocalIngest.Listen == "" {
+		c.LocalIngest.Listen = "127.0.0.1:7438"
+	}
+	if c.LocalIngest.AdvertisePath == "" {
+		dir := "/var/lib/agentboard-client"
+		if c.Storage.SpoolPath != "" {
+			dir = filepath.Dir(c.Storage.SpoolPath)
+		}
+		c.LocalIngest.AdvertisePath = filepath.Join(dir, "local-ingest.json")
+	}
 }
 
 func (c *Config) validate() error {
@@ -262,6 +434,16 @@ func (c *Config) validate() error {
 	}
 	if os.Getenv(c.Server.MachineTokenEnv) == "" {
 		return fmt.Errorf("environment variable %s (machine token) is empty", c.Server.MachineTokenEnv)
+	}
+	if c.LocalIngestOn() {
+		host, _, err := net.SplitHostPort(c.LocalIngest.Listen)
+		if err != nil {
+			return fmt.Errorf("local_ingest.listen: %w", err)
+		}
+		ip := net.ParseIP(host)
+		if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return fmt.Errorf("local_ingest.listen must be loopback, got %q", c.LocalIngest.Listen)
+		}
 	}
 	if c.Collectors.HTTP.Enabled {
 		seen := map[string]struct{}{}
@@ -282,6 +464,84 @@ func (c *Config) validate() error {
 			seen[t.ServiceKey] = struct{}{}
 		}
 	}
+	if c.AI.Enabled {
+		switch strings.ToLower(c.AI.Provider) {
+		case "cursor-agent", "cursor", "codex", "command":
+		default:
+			return fmt.Errorf("ai.provider must be cursor-agent, codex or command")
+		}
+		if strings.EqualFold(c.AI.Provider, "command") && len(c.AI.Command) == 0 {
+			return fmt.Errorf("ai.command is required when provider=command")
+		}
+		if c.AI.Workspace != "" && !filepath.IsAbs(c.AI.Workspace) {
+			return fmt.Errorf("ai.workspace must be an absolute path")
+		}
+		seen := map[string]struct{}{}
+		for i, s := range c.AI.Summarize {
+			if !machineKeyRe.MatchString(s.ServiceKey) {
+				return fmt.Errorf("ai.summarize[%d].service_key must match [a-z0-9._-]{1,64}", i)
+			}
+			if _, dup := seen[s.ServiceKey]; dup {
+				return fmt.Errorf("ai.summarize[%d].service_key %q is duplicated", i, s.ServiceKey)
+			}
+			seen[s.ServiceKey] = struct{}{}
+			switch {
+			case s.Source == "agent_logs", s.Source == "cursor_transcript", strings.HasPrefix(s.Source, "probe:"):
+			default:
+				return fmt.Errorf("ai.summarize[%d].source %q is not supported", i, s.Source)
+			}
+		}
+		if c.AI.Discover.Enabled {
+			if !machineKeyRe.MatchString(c.AI.Discover.ServiceKey) {
+				return fmt.Errorf("ai.discover.service_key must match [a-z0-9._-]{1,64}")
+			}
+			ids := map[string]struct{}{}
+			for i, cmd := range c.AI.Discover.AllowCommands {
+				if cmd.ID == "" {
+					return fmt.Errorf("ai.discover.allow_commands[%d].id is required", i)
+				}
+				if len(cmd.Argv) == 0 {
+					return fmt.Errorf("ai.discover.allow_commands[%d].argv is required", i)
+				}
+				if _, dup := ids[cmd.ID]; dup {
+					return fmt.Errorf("ai.discover.allow_commands[%d].id %q is duplicated", i, cmd.ID)
+				}
+				ids[cmd.ID] = struct{}{}
+				usesPath := false
+				for _, a := range cmd.Argv {
+					if strings.Contains(a, "{path}") {
+						usesPath = true
+					}
+				}
+				if usesPath && len(cmd.AllowPaths) == 0 {
+					return fmt.Errorf("ai.discover.allow_commands[%d].allow_paths is required for {path}", i)
+				}
+			}
+		}
+	}
+	if c.Collectors.Probes.Enabled {
+		seen := map[string]struct{}{}
+		for i, s := range c.Collectors.Probes.Scripts {
+			if !machineKeyRe.MatchString(s.ServiceKey) {
+				return fmt.Errorf("collectors.probes.scripts[%d].service_key must match [a-z0-9._-]{1,64}", i)
+			}
+			if _, dup := seen[s.ServiceKey]; dup {
+				return fmt.Errorf("collectors.probes.scripts[%d].service_key %q is duplicated", i, s.ServiceKey)
+			}
+			seen[s.ServiceKey] = struct{}{}
+			if len(s.Command) == 0 {
+				return fmt.Errorf("collectors.probes.scripts[%d].command is required", i)
+			}
+			if !filepath.IsAbs(s.Command[0]) {
+				return fmt.Errorf("collectors.probes.scripts[%d].command[0] must be an absolute path", i)
+			}
+			switch strings.ToLower(s.Format) {
+			case "json", "text":
+			default:
+				return fmt.Errorf("collectors.probes.scripts[%d].format must be json or text", i)
+			}
+		}
+	}
 	return nil
 }
 
@@ -295,3 +555,19 @@ func (c *Config) HTTPFollowRedirects() bool {
 
 // Token returns the machine token from the configured environment variable.
 func (c *Config) Token() string { return os.Getenv(c.Server.MachineTokenEnv) }
+
+// LocalIngestOn is true unless explicitly disabled. Default on so coding agents can discover the client.
+func (c *Config) LocalIngestOn() bool {
+	if c.LocalIngest.Enabled == nil {
+		return true
+	}
+	return *c.LocalIngest.Enabled
+}
+
+// FallbackHeuristicOn is true unless explicitly disabled.
+func (c AIConfig) FallbackHeuristicOn() bool {
+	if c.FallbackHeuristic == nil {
+		return true
+	}
+	return *c.FallbackHeuristic
+}

@@ -32,7 +32,7 @@
 | event_type | 用途 |
 |---|---|
 | `service.state` | 存活/状态。带 `ttl_seconds`；超时未再上报则看板显示 **TTL 过期**。 |
-| `status.upsert` | 键值状态（存活、provider、最近心跳）。 |
+| `status.upsert` | 键值状态。心跳默认不写（存活看 `service.state` TTL）。 |
 | `run.transition` | 一次长程任务的生命周期。`run_key` 必填。 |
 | `log.append` | 进度/错误日志（markdown，≤64KiB）。 |
 | `log.pin` | 置顶一条总结（可选）。 |
@@ -72,6 +72,22 @@ payload 要点：
 ```
 
 推荐 TTL=180s。OpenClaw / 长驻进程至少每 60s 发一次 `heartbeat`。超过 TTL 未上报，看板将该服务标为 `stale` / warning。这就是「还活着没有」的依据。
+
+`summary` 为空字符串时，服务端**不覆盖**已有 `state_summary`（Cursor/Codex 的 heartbeat 用这个避免把任务说明冲掉）。`run.transition` 成功后，服务端按该服务非终态 Run 重写摘要为 `N 进行中：…`，没有进行中任务则为 `空闲`。
+
+`log.append` 若带 `run_key` 且该 Run 已存在，事件会挂到对应 `run_id`。
+
+## Cursor / Codex 场景
+
+`report.py` 与本机 `board-client` **独立**：
+
+1. **本 skill**：始终 `POST {AGENTBOARD_URL}/ingest/v1/events`，`Authorization: Bearer {AGENTBOARD_TOKEN}`。Token 绑定项目的 **virtual machine**。`service_key` = `cursor` / `codex`（可用 `AGENTBOARD_SERVICE_KEY` 覆盖）。
+2. **Cursor Cloud Agent**（`CURSOR_CLOUD_AGENT`）：同样直连看板、同样用 skill token；`service_key` = `cloud-{hostname}`。
+3. **本机 board-client**：用自己的 `ABP_MACHINE_TOKEN` 上报物理机。发现 loopback ingest **不会**改 agent 的 Machine / service_key，也**不会**用 client token 转发 agent 事件。
+
+advertise 文件若带 `"mode":"tee"`，脚本在远程上报成功后会把事件再复制一份到 loopback（带 `workspace`）。board-client 用**自己的** token 投影为 `proj-{目录名}`，并 tee `log.append` 供本机 AI 总结。这不是把 skill 身份改挂到物理机。未设置 `AGENTBOARD_TOKEN` 时跳过，有 client 也不能代替。
+
+`run_key`：每次 `start` 新建（UUID）。同一对话的 `progress` / `succeed` / `fail` 读本机状态文件续这条。`CURSOR_CONVERSATION_ID` / `CODEX_THREAD_ID` 只写入 metadata，不当作 run_key（否则整段对话共用一条，第一次 succeed 之后再 start 会被 `invalid_transition` 丢掉）。不要手动设 `AGENTBOARD_RUN_KEY`，除非续跑同一条 Run。
 
 ## Ping
 

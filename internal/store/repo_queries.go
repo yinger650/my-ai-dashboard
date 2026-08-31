@@ -299,3 +299,30 @@ func (s *Store) ListRuns(ctx context.Context, serviceID string, limit int) ([]*R
 	}
 	return out, rows.Err()
 }
+
+// ListActiveRunsByMachine returns non-terminal runs for a machine, newest first.
+func (s *Store) ListActiveRunsByMachine(ctx context.Context, machineID string) ([]ActiveRun, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.id, r.service_id, sv.service_key, sv.name, r.run_key, r.status, r.summary, r.started_at, r.created_at
+		FROM runs r
+		JOIN services sv ON sv.id = r.service_id
+		WHERE sv.machine_id = ? AND sv.deleted_at IS NULL
+		  AND r.status IN ('queued','running','waiting_input','blocked')
+		ORDER BY r.updated_at DESC`, machineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActiveRun
+	for rows.Next() {
+		var r ActiveRun
+		if err := rows.Scan(&r.ID, &r.ServiceID, &r.ServiceKey, &r.ServiceName, &r.RunKey, &r.Status, &r.Summary, &r.StartedAt, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if out == nil {
+		out = []ActiveRun{}
+	}
+	return out, rows.Err()
+}

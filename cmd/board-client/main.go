@@ -142,6 +142,13 @@ intervals:
   cursor_agent: 5m
   http: 60s
 
+local_ingest:
+  enabled: true
+  listen: "127.0.0.1:7438"
+  advertise_path: "/var/lib/agentboard-client/local-ingest.json"
+  # Loopback copy of agent events. board-client projects them to proj-*
+  # with this client's token and tees log.append for AI digest.
+
 collectors:
   cpu: true
   memory: true
@@ -198,4 +205,44 @@ collectors:
         url: "https://board.yinger650.com/health/live"
         method: GET
         expect_status: [200]
+  probes:
+    enabled: false
+    scripts:
+      - service_key: gpu
+        name: GPU 节点
+        command: ["/etc/agentboard/probes/gpu.sh"]
+        interval: 60s
+        timeout: 15s
+        format: json
+        ttl_seconds: 180
+
+ai:
+  enabled: false
+  provider: cursor-agent
+  api_key_env: "CURSOR_API_KEY"
+  workspace: "/var/lib/agentboard-client/ai-workspace"
+  timeout: 120s
+  max_calls_per_day: 48
+  fallback_heuristic: true
+  summarize:
+    - source: agent_logs
+      service_key: ai-agent-digest
+      name: Agent 日志总结
+      interval: 15m
+      min_new_logs: 3
+  discover:
+    enabled: false
+    service_key: ai-inspect
+    name: AI 主机巡检
+    interval: 6h
+    ttl_seconds: 43200
+    max_investigations: 8
+    allow_commands:
+      - id: unit_status
+        argv: ["systemctl", "status", "--no-pager", "-n", "50", "{unit}"]
+      - id: unit_journal
+        argv: ["journalctl", "--no-pager", "-n", "200", "-u", "{unit}"]
+      - id: read_file
+        argv: ["cat", "{path}"]
+        allow_paths: ["/var/log/**", "/etc/agentboard/**"]
 `
