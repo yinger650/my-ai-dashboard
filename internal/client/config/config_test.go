@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,6 +48,15 @@ func TestLoadAndValidate(t *testing.T) {
 	}
 	if c.Token() != "abp_m_secret" {
 		t.Errorf("token = %q", c.Token())
+	}
+	if !c.LocalIngestOn() {
+		t.Fatal("local ingest should default on")
+	}
+	if c.LocalIngest.Listen != "127.0.0.1:7438" {
+		t.Errorf("listen = %q", c.LocalIngest.Listen)
+	}
+	if !strings.HasSuffix(c.LocalIngest.AdvertisePath, "local-ingest.json") {
+		t.Errorf("advertise = %q", c.LocalIngest.AdvertisePath)
 	}
 }
 
@@ -144,6 +154,57 @@ collectors:
 	}
 	if _, err := Load(p); err == nil {
 		t.Fatal("expected duplicate service_key error")
+	}
+}
+
+func TestAIAndProbeValidation(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	t.Setenv("TEST_TOKEN_VAR", "abp_m_secret")
+	src := `version: 1
+server:
+  url: "http://127.0.0.1:8080"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "dev"
+ai:
+  enabled: true
+  provider: command
+  command: ["/bin/true"]
+  summarize:
+    - source: agent_logs
+      service_key: ai-agent-digest
+collectors:
+  probes:
+    enabled: true
+    scripts:
+      - service_key: load
+        command: ["/usr/local/bin/load.sh"]
+        format: json
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AI.Timeout.Duration != 120*time.Second {
+		t.Errorf("timeout default %v", c.AI.Timeout.Duration)
+	}
+	if !c.AI.FallbackHeuristicOn() {
+		t.Fatal("fallback default")
+	}
+	if c.Collectors.Probes.Scripts[0].Timeout.Duration != 15*time.Second {
+		t.Fatal("probe timeout default")
+	}
+
+	bad := strings.Replace(src, "command: [\"/usr/local/bin/load.sh\"]", "command: [\"load.sh\"]", 1)
+	if err := os.WriteFile(p, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("relative probe path should fail")
 	}
 }
 

@@ -4,12 +4,14 @@
 
 ## AgentBoard 上报
 
-长程任务（多步实现、部署、排查，大约超过 2 分钟）必须向
-https://board.yinger650.com 上报，用来确认任务是否做完，以及 OpenClaw 是否存活、有没有内部错误。
+本项目**每一次会话/任务**必须向 https://board.yinger650.com 上报：
+开始时 `start`（描述正在做什么），结束时 `succeed` 或 `fail`。
+
+Token 写在仓库根目录 `.env`（`AGENTBOARD_TOKEN`，不要入库）。脚本会自动读取 `.env`。未设置 token 时静默跳过；本机 board-client 用自己的 token 报物理机，不能代替本 skill 的 token。
 
 1. 若存在 `skills/agentboard-report/SKILL.md`，先读再执行。
-2. 有 `AGENTBOARD_TOKEN` 时，用
-   `python3 skills/agentboard-report/scripts/report.py <start|heartbeat|progress|error|succeed|fail> "说明"`。
-3. 未设置 token：静默跳过，不要询问、不要失败。
+2. 用 `python3 skills/agentboard-report/scripts/report.py <start|heartbeat|progress|error|succeed|fail> "说明"`。
+3. 未设置 token：静默跳过，不要询问、不要失败。本机有 client 不能代替 token。
 4. 不要打印 token。上报失败不能中断用户任务。
 5. Cursor：`AGENTBOARD_PROVIDER=cursor`。Codex：`codex`。OpenClaw：`openclaw`，并保持心跳（TTL 180s）。
+6. 每次 `start` 一条新 Run；不要设置 `AGENTBOARD_RUN_KEY`，除非续同一条 Run。

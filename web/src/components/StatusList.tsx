@@ -3,16 +3,21 @@ import { Link } from "react-router-dom";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { BoardService, StatusItem } from "../types";
 import { compactCardServices } from "../lib/board-card";
+import { formatStatusValue } from "../lib/board-metrics";
 import { SevDot } from "./Severity";
 import { cn } from "../lib/utils";
 
-function formatStatusValue(st: StatusItem): string {
-  try {
-    const v = JSON.parse(st.value_json);
-    return String(v);
-  } catch {
-    return st.value_json;
-  }
+function NewLogBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  const label = count > 99 ? "99+" : String(count);
+  return (
+    <span
+      className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white"
+      title={`${count} 条日志`}
+    >
+      {label}
+    </span>
+  );
 }
 
 export function StatusList({
@@ -20,14 +25,20 @@ export function StatusList({
   statuses,
   collapsedCount = 6,
   compact = false,
+  newLogCounts = {},
+  host,
+  onOpenService,
 }: {
   services: BoardService[];
   statuses: StatusItem[];
   collapsedCount?: number;
   compact?: boolean;
+  newLogCounts?: Record<string, number>;
+  host?: { kind?: string | null; machineLastSeenAt?: string | null };
+  onOpenService?: (serviceId?: string, serviceKey?: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const items = buildRows(compact ? compactCardServices(services) : services, compact ? [] : statuses);
+  const items = buildRows(compact ? compactCardServices(services, host) : services, compact ? [] : statuses);
   if (items.length === 0) {
     return <div className="py-1 text-xs text-slate-500">暂无状态</div>;
   }
@@ -36,27 +47,37 @@ export function StatusList({
 
   return (
     <div className="flex flex-col gap-1">
-      {shown.map((row) => (
-        <div key={row.key} className="flex min-w-0 items-start gap-2 text-xs">
-          <SevDot severity={row.severity} />
-          <div className="min-w-0 flex-1">
-            {row.href ? (
-              <Link
-                to={row.href}
-                onClick={(e) => e.stopPropagation()}
-                className="truncate font-medium text-slate-200 hover:text-indigo-300"
-              >
-                {row.title}
-              </Link>
-            ) : (
-              <span className="truncate text-slate-300">{row.title}</span>
-            )}
-            {row.detail && (
-              <div className={cn("truncate text-slate-500", `sev-${row.severity}`)}>{row.detail}</div>
-            )}
+      {shown.map((row) => {
+        const count = newLogCounts[row.serviceId ?? ""] ?? newLogCounts[row.serviceKey ?? ""] ?? 0;
+        return (
+          <div
+            key={row.key}
+            className={cn("flex min-w-0 gap-2 text-xs", compact ? "items-center" : "items-start")}
+          >
+            <SevDot severity={row.severity} />
+            <div className="min-w-0 flex-1">
+              {row.href ? (
+                <Link
+                  to={row.href}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenService?.(row.serviceId, row.serviceKey);
+                  }}
+                  className="block truncate font-medium text-slate-200 hover:text-indigo-300"
+                >
+                  {row.title}
+                </Link>
+              ) : (
+                <span className="block truncate text-slate-300">{row.title}</span>
+              )}
+              {!compact && row.detail && (
+                <div className={cn("truncate text-slate-500", `sev-${row.severity}`)}>{row.detail}</div>
+              )}
+            </div>
+            {compact && <NewLogBadge count={count} />}
           </div>
-        </div>
-      ))}
+        );
+      })}
       {items.length > collapsedCount && (
         <button
           type="button"
@@ -88,6 +109,8 @@ interface Row {
   detail?: string;
   severity: string;
   href?: string;
+  serviceId?: string;
+  serviceKey?: string;
 }
 
 function buildRows(services: BoardService[], statuses: StatusItem[]): Row[] {
@@ -108,6 +131,8 @@ function buildRows(services: BoardService[], statuses: StatusItem[]): Row[] {
         detail: svc.state_summary || svc.current_state,
         severity: svc.severity,
         href: `/services/${svc.id}`,
+        serviceId: svc.id,
+        serviceKey: svc.service_key,
       });
       for (const st of statusesByService.get(svc.id) ?? []) {
         rows.push({
@@ -126,5 +151,7 @@ function buildRows(services: BoardService[], statuses: StatusItem[]): Row[] {
     title: st.service_name ? `${st.service_name} · ${st.label}` : st.label,
     detail: `${formatStatusValue(st)}${st.unit ? ` ${st.unit}` : ""}`,
     severity: st.severity,
+    serviceId: st.service_id,
+    serviceKey: st.service_key,
   }));
 }

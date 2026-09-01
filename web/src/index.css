@@ -41,7 +41,27 @@ body {
 
 .log-pane {
   scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
+  scrollbar-color: #64748b #0f172a;
+  scrollbar-gutter: stable;
+}
+
+.log-pane::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.log-pane::-webkit-scrollbar-track {
+  background: #0f172a;
+  border-radius: 8px;
+}
+
+.log-pane::-webkit-scrollbar-thumb {
+  background: #64748b;
+  border-radius: 8px;
+}
+
+.log-pane::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 
 .react-grid-item {

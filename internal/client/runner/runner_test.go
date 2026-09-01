@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"agentboard/internal/client/aiinspect"
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/spool"
 	"agentboard/internal/event"
@@ -190,5 +192,186 @@ collectors:
 	}
 	if types[event.TypePortSnapshot] != 1 {
 		t.Fatalf("port snapshot = %d types=%v", types[event.TypePortSnapshot], types)
+	}
+}
+
+func TestEmitProbeJSON(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "p.sh")
+	body := "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"running\",\"summary\":\"ok\",\"severity\":\"normal\",\"statuses\":[{\"key\":\"load1\",\"value\":\"0.1\"}],\"pinned_markdown\":\"load 0.1\"}'\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ABP_MACHINE_TOKEN", "abp_m_test")
+	cfgPath := filepath.Join(dir, "client.yaml")
+	src := `version: 1
+server:
+  url: "http://127.0.0.1:9"
+machine:
+  key: "home-server"
+storage:
+  spool_path: "` + filepath.Join(dir, "spool.db") + `"
+collectors:
+  probes:
+    enabled: true
+    scripts:
+      - service_key: load
+        name: Load
+        command: ["` + script + `"]
+        format: json
+        timeout: 5s
+`
+	if err := os.WriteFile(cfgPath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, err := spool.Open(cfg.Storage.SpoolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sp.Close() })
+	r := New(cfg, sp, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	r.emitProbes()
+	batch, err := sp.Batch(20, 256*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]int{}
+	for _, q := range batch {
+		var env event.Envelope
+		_ = json.Unmarshal([]byte(q.Payload), &env)
+		types[env.EventType]++
+		if env.ServiceKey != "" && env.ServiceKey != "load" {
+			t.Fatalf("unexpected key %s", env.ServiceKey)
+		}
+	}
+	if types[event.TypeServiceState] != 1 || types[event.TypeStatusUpsert] != 1 || types[event.TypeLogPin] != 1 {
+		t.Fatalf("types %v", types)
+	}
+}
+
+func TestEmitAISummariesCommandProvider(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-agent.sh")
+	srcScript := filepath.Join("..", "aiinspect", "testdata", "fake-agent.sh")
+	b, err := os.ReadFile(srcScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ABP_MACHINE_TOKEN", "abp_m_test")
+	cfgPath := filepath.Join(dir, "client.yaml")
+	yaml := `version: 1
+server:
+  url: "http://127.0.0.1:9"
+machine:
+  key: "home-server"
+storage:
+  spool_path: "` + filepath.Join(dir, "spool.db") + `"
+ai:
+  enabled: true
+  provider: command
+  command: ["` + script + `"]
+  timeout: 5s
+  max_calls_per_day: 48
+  summarize:
+    - source: agent_logs
+      service_key: ai-agent-digest
+      name: Agent 日志总结
+      interval: 1s
+      min_new_logs: 3
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, err := spool.Open(cfg.Storage.SpoolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sp.Close() })
+	r := New(cfg, sp, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	for _, md := range []string{"start task", "error failed", "still running"} {
+		_ = r.logBuf.Append(aiinspect.Entry{Markdown: md, Severity: "info", Source: "cursor"})
+	}
+	r.emitAISummaries()
+	batch, err := sp.Batch(20, 256*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, q := range batch {
+		var env event.Envelope
+		_ = json.Unmarshal([]byte(q.Payload), &env)
+		if env.EventType == event.TypeLogPin && env.ServiceKey == "ai-agent-digest" {
+			found = true
+			if !strings.Contains(string(env.Payload), "stub") && !strings.Contains(string(env.Payload), "摘要") {
+				t.Fatalf("pin body %s", env.Payload)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected ai-agent-digest pin")
+	}
+}
+
+func TestIngestProjectCopyQueuesProjService(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ABP_MACHINE_TOKEN", "abp_m_test")
+	cfgPath := filepath.Join(dir, "client.yaml")
+	yaml := `version: 1
+server:
+  url: "http://127.0.0.1:9"
+machine:
+  key: "devbox"
+storage:
+  spool_path: "` + filepath.Join(dir, "spool.db") + `"
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, err := spool.Open(cfg.Storage.SpoolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sp.Close() })
+	r := New(cfg, sp, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	raw, _ := json.Marshal(event.ServiceState{
+		Name: "Cursor Agent", Type: "agent", State: "running", Severity: "normal",
+		Metadata: map[string]any{"workspace": "/work/my-ai-dashboard", "project": "my-ai-dashboard"},
+	})
+	r.ingestProjectCopy(event.Envelope{EventType: event.TypeServiceState, ServiceKey: "cursor", Payload: raw})
+	batch, err := sp.Batch(20, 256*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]int{}
+	types := map[string]int{}
+	for _, q := range batch {
+		var env event.Envelope
+		_ = json.Unmarshal([]byte(q.Payload), &env)
+		keys[env.ServiceKey]++
+		types[env.EventType]++
+	}
+	if keys["proj-my-ai-dashboard"] < 1 {
+		t.Fatalf("keys=%v types=%v", keys, types)
+	}
+	if types[event.TypeServiceState] < 1 || types[event.TypeStatusUpsert] < 1 {
+		t.Fatalf("types=%v", types)
 	}
 }

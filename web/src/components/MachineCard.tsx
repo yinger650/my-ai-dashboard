@@ -1,10 +1,18 @@
 import { Link } from "react-router-dom";
-import type { BoardMachine } from "../types";
+import { useCallback, useMemo, useState } from "react";
+import type { BoardMachine, LogEntry } from "../types";
 import { HealthBadge, SevDot } from "./Severity";
 import { StatusList } from "./StatusList";
+import { StatusLines } from "./StatusLines";
+import { PercentMetricGrid } from "./PercentMetricGrid";
 import { MachineLogStream } from "./MachineLogStream";
-import { fmtBps, fmtPct, relativeTime, usagePct } from "../format";
+import { ActiveRunsList } from "./ActiveRunsList";
+import { fmtBps, relativeTime } from "../format";
 import { cn } from "../lib/utils";
+import { countUnseenLogsByService } from "../lib/logs";
+import { readLogSeen, markServiceLogsSeen } from "../lib/log-seen";
+import { collectPercentMetrics, hasNetworkSample } from "../lib/board-metrics";
+import { userFacingStatuses } from "../lib/status-filter";
 import { GripVertical } from "lucide-react";
 
 export function MachineCard({
@@ -20,9 +28,25 @@ export function MachineCard({
 }) {
   const offline = m.health === "offline";
   const lm = m.latest_metric;
-  const mem = usagePct(lm?.memory_used_bytes ?? null, lm?.memory_total_bytes ?? null);
-  const disk = usagePct(lm?.root_disk_used_bytes ?? null, lm?.root_disk_total_bytes ?? null);
+  const percents = useMemo(
+    () =>
+      collectPercentMetrics({
+        latest_metric: lm,
+        heartbeat_metrics: m.heartbeat_metrics,
+        statuses: m.statuses,
+      }),
+    [lm, m.heartbeat_metrics, m.statuses],
+  );
+  const lines = useMemo(() => userFacingStatuses(m.statuses, "card"), [m.statuses]);
+  const showNet = hasNetworkSample(lm);
   const c = m.service_counts;
+  const [liveLogs, setLiveLogs] = useState<LogEntry[]>(() => m.recent_logs ?? []);
+  const [seenUntil, setSeenUntil] = useState<Record<string, string>>(readLogSeen);
+  const onLogsChange = useCallback((logs: LogEntry[]) => setLiveLogs(logs), []);
+  const newLogCounts = useMemo(() => countUnseenLogsByService(liveLogs, seenUntil), [liveLogs, seenUntil]);
+  const onOpenService = useCallback((serviceId?: string, serviceKey?: string) => {
+    setSeenUntil(markServiceLogsSeen([serviceId, serviceKey]));
+  }, []);
 
   return (
     <article
@@ -51,17 +75,27 @@ export function MachineCard({
         <HealthBadge health={m.health} />
       </header>
 
-      <div className="mb-2 grid grid-cols-3 gap-2 text-center text-sm">
-        <Metric label="CPU" value={fmtPct(lm?.cpu_percent ?? null)} />
-        <Metric label="内存" value={fmtPct(mem)} />
-        <Metric label="磁盘" value={fmtPct(disk)} />
-      </div>
-      <div className="mb-2 text-xs text-slate-400">
-        ↓ {fmtBps(lm?.network_rx_bps ?? null)} · ↑ {fmtBps(lm?.network_tx_bps ?? null)}
-      </div>
+      <PercentMetricGrid metrics={percents} />
+      {showNet && (
+        <div className="mb-2 text-xs text-slate-400">
+          ↓ {fmtBps(lm?.network_rx_bps ?? null)} · ↑ {fmtBps(lm?.network_tx_bps ?? null)}
+        </div>
+      )}
 
-      <div className="mb-2 max-h-28 overflow-hidden">
-        <StatusList services={m.services ?? []} statuses={[]} collapsedCount={6} compact />
+      <StatusLines statuses={lines} />
+
+      <ActiveRunsList runs={m.active_runs ?? []} compact />
+
+      <div className="log-pane mb-2 max-h-24 overflow-y-auto pr-1">
+        <StatusList
+          services={m.services ?? []}
+          statuses={[]}
+          collapsedCount={8}
+          compact
+          newLogCounts={newLogCounts}
+          onOpenService={onOpenService}
+          host={{ kind: m.kind, machineLastSeenAt: m.last_seen_at }}
+        />
       </div>
 
       <MachineLogStream
@@ -71,6 +105,7 @@ export function MachineCard({
         initialLogs={m.recent_logs ?? []}
         initialPinned={m.pinned_logs ?? []}
         compact
+        onLogsChange={onLogsChange}
       />
 
       <footer className="mt-2 flex items-center gap-3 text-xs">
@@ -89,14 +124,5 @@ export function MachineCard({
         </span>
       </footer>
     </article>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md bg-slate-900/60 py-2">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="font-semibold">{value}</div>
-    </div>
   );
 }

@@ -17,6 +17,21 @@ const (
 	diskErr  = 95.0
 )
 
+// virtual machines are not required to send machine.heartbeat; give them a
+// longer last-seen window before stale/offline.
+const virtualSeenFloor = 10 * time.Minute
+
+func seenInterval(m *store.Machine) time.Duration {
+	interval := time.Duration(m.HeartbeatIntervalSeconds) * time.Second
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	if m.Kind == "virtual" && interval < virtualSeenFloor {
+		return virtualSeenFloor
+	}
+	return interval
+}
+
 // machineHealth computes the health string for a machine given its latest
 // metric sample and the current time.
 func machineHealth(m *store.Machine, latest *store.MetricSample, now time.Time) (health string, resourceSeverity string) {
@@ -30,10 +45,7 @@ func machineHealth(m *store.Machine, latest *store.MetricSample, now time.Time) 
 	if err != nil {
 		return "unknown", "unknown"
 	}
-	interval := time.Duration(m.HeartbeatIntervalSeconds) * time.Second
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
+	interval := seenInterval(m)
 	delta := now.Sub(last)
 
 	switch {

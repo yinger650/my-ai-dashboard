@@ -26,6 +26,11 @@ intervals:
   cursor_agent: 5m
   http: 60s
 
+local_ingest:
+  enabled: true
+  listen: "127.0.0.1:7438"
+  advertise_path: "/var/lib/agentboard-client/local-ingest.json"
+
 collectors:
   cpu: true
   memory: true

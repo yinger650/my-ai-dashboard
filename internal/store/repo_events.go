@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"agentboard/internal/event"
 	"agentboard/internal/shared"
@@ -126,8 +128,8 @@ func (s *Store) projectTx(ctx context.Context, tx *sql.Tx, env *event.Envelope, 
 			return rejected("validation_failed", "invalid severity", true), nil
 		}
 		severity = ss.Severity
-		if _, err := tx.ExecContext(ctx, `UPDATE services SET current_state = ?, state_summary = ?, severity = ?, ttl_seconds = COALESCE(?, ttl_seconds), last_seen_at = ?, updated_at = ? WHERE id = ?`,
-			ss.State, ss.Summary, ss.Severity, ss.TTLSeconds, env.OccurredAt, receivedAt, *serviceID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE services SET current_state = ?, state_summary = CASE WHEN ? = '' THEN state_summary ELSE ? END, severity = ?, ttl_seconds = COALESCE(?, ttl_seconds), last_seen_at = ?, updated_at = ? WHERE id = ?`,
+			ss.State, ss.Summary, ss.Summary, ss.Severity, ss.TTLSeconds, env.OccurredAt, receivedAt, *serviceID); err != nil {
 			return IngestResult{}, err
 		}
 
@@ -193,6 +195,9 @@ func (s *Store) projectTx(ctx context.Context, tx *sql.Tx, env *event.Envelope, 
 		if _, err := tx.ExecContext(ctx, `UPDATE services SET last_run_at = ?, updated_at = ? WHERE id = ?`, env.OccurredAt, receivedAt, *serviceID); err != nil {
 			return IngestResult{}, err
 		}
+		if err := s.refreshActiveRunSummaryTx(ctx, tx, *serviceID, receivedAt); err != nil {
+			return IngestResult{}, err
+		}
 
 	case event.TypeCollectorNotice:
 		var cn event.CollectorNotice
@@ -215,6 +220,16 @@ func (s *Store) projectTx(ctx context.Context, tx *sql.Tx, env *event.Envelope, 
 			return IngestResult{}, err
 		} else if errRes.Status == "rejected" {
 			return errRes, nil
+		}
+	}
+
+	if runID == nil && env.RunKey != "" && serviceID != nil {
+		var rid string
+		err := tx.QueryRowContext(ctx, `SELECT id FROM runs WHERE service_id = ? AND run_key = ?`, *serviceID, env.RunKey).Scan(&rid)
+		if err == nil {
+			runID = &rid
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return IngestResult{}, err
 		}
 	}
 
@@ -420,6 +435,10 @@ func (s *Store) projectServiceSnapshotTx(ctx context.Context, tx *sql.Tx, env *e
 }
 
 func (s *Store) updateMachineFromHeartbeatTx(ctx context.Context, tx *sql.Tx, machineID string, hb *event.Heartbeat, env *event.Envelope) error {
+	var metaJSON string
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM machines WHERE id = ?`, machineID).Scan(&metaJSON); err != nil {
+		return err
+	}
 	now := shared.FormatTime(shared.NowUTC())
 	_, err := tx.ExecContext(ctx, `
 		UPDATE machines SET
@@ -429,11 +448,73 @@ func (s *Store) updateMachineFromHeartbeatTx(ctx context.Context, tx *sql.Tx, ma
 			collector_version = COALESCE(NULLIF(?, ''), collector_version),
 			boot_id = COALESCE(NULLIF(?, ''), boot_id),
 			heartbeat_interval_seconds = CASE WHEN ? > 0 THEN ? ELSE heartbeat_interval_seconds END,
+			metadata_json = ?,
 			last_seen_at = ?, last_event_at = ?, updated_at = ?
 		WHERE id = ?`,
 		hb.OS, hb.Arch, hb.Hostname, hb.CollectorVersion, env.BootID,
-		hb.HeartbeatIntervalSeconds, hb.HeartbeatIntervalSeconds, now, env.OccurredAt, now, machineID)
+		hb.HeartbeatIntervalSeconds, hb.HeartbeatIntervalSeconds,
+		MergeHeartbeatMetrics(metaJSON, hb.Metadata),
+		now, env.OccurredAt, now, machineID)
 	return err
+}
+
+func (s *Store) refreshActiveRunSummaryTx(ctx context.Context, tx *sql.Tx, serviceID, receivedAt string) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT summary FROM runs
+		WHERE service_id = ? AND status IN ('queued','running','waiting_input','blocked')
+		ORDER BY updated_at DESC`, serviceID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var parts []string
+	for rows.Next() {
+		var summary string
+		if err := rows.Scan(&summary); err != nil {
+			return err
+		}
+		parts = append(parts, summary)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	var summary string
+	if len(parts) == 0 {
+		var last string
+		err := tx.QueryRowContext(ctx, `
+			SELECT summary FROM runs
+			WHERE service_id = ? AND status IN ('succeeded','failed','cancelled','timed_out')
+			ORDER BY updated_at DESC LIMIT 1`, serviceID).Scan(&last)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		last = strings.TrimSpace(last)
+		if last == "" {
+			summary = "空闲"
+		} else {
+			summary = "空闲：" + clipRunes(last, 80)
+		}
+	} else {
+		clipped := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				p = "进行中"
+			}
+			clipped = append(clipped, clipRunes(p, 40))
+		}
+		summary = fmt.Sprintf("%d 进行中：%s", len(parts), strings.Join(clipped, "；"))
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE services SET state_summary = ?, updated_at = ? WHERE id = ?`, summary, receivedAt, serviceID)
+	return err
+}
+
+func clipRunes(s string, max int) string {
+	if max <= 0 || utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:max]) + "…"
 }
 
 func maxSeverity(a, b string) string {

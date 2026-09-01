@@ -168,3 +168,33 @@ func (s *Spool) Trim(maxEvents int) (int, error) {
 	dropped, _ := res.RowsAffected()
 	return int(dropped), nil
 }
+
+// GetState reads a client_state value. ok is false when the key is missing.
+func (s *Spool) GetState(key string) (string, bool, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT value_json FROM client_state WHERE key = ?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return v, true, nil
+}
+
+// SetState upserts a client_state value.
+func (s *Spool) SetState(key, valueJSON string) error {
+	now := shared.FormatTime(shared.NowUTC())
+	_, err := s.db.Exec(`
+		INSERT INTO client_state (key, value_json, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+		key, valueJSON, now)
+	return err
+}
+
+// DeleteState removes a client_state key.
+func (s *Spool) DeleteState(key string) error {
+	_, err := s.db.Exec(`DELETE FROM client_state WHERE key = ?`, key)
+	return err
+}

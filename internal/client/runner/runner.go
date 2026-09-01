@@ -10,14 +10,20 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"agentboard/internal/client/agent"
+	"agentboard/internal/client/aiinspect"
+	"agentboard/internal/client/aiprovider"
 	"agentboard/internal/client/collector"
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/hostsnap"
+	"agentboard/internal/client/localingest"
+	"agentboard/internal/client/probe"
+	"agentboard/internal/client/projreport"
 	"agentboard/internal/client/sender"
 	"agentboard/internal/client/spool"
 	"agentboard/internal/event"
@@ -45,6 +51,14 @@ type Runner struct {
 	lastSnap  *hostsnap.Snapshot
 	hostRoot  string
 	runCmd    collector.Commander
+
+	mu        sync.Mutex
+	logBuf    *aiinspect.Buffer
+	provider  aiprovider.Provider
+	lastProbe map[string]time.Time
+	lastSum   map[string]time.Time
+	lastDisc  time.Time
+	probePin  map[string]string
 }
 
 // New constructs a Runner.
@@ -62,6 +76,10 @@ func New(cfg *config.Config, sp *spool.Spool, log *slog.Logger) *Runner {
 		httpPrev:  map[string]bool{},
 		proj:      agent.NewState(),
 		cronTail:  &collector.CronTail{Seen: map[string]bool{}},
+		logBuf:    aiinspect.NewBuffer(sp),
+		lastProbe: map[string]time.Time{},
+		lastSum:   map[string]time.Time{},
+		probePin:  map[string]string{},
 	}
 }
 
@@ -85,11 +103,20 @@ func (r *Runner) enqueue(eventType, serviceKey, runKey string, payload any) {
 	}
 }
 
+func (r *Runner) ingestProjectCopy(env event.Envelope) {
+	for _, p := range projreport.Project(env) {
+		r.enqueue(p.Type, p.ServiceKey, p.RunKey, p.Payload)
+	}
+}
+
 // CollectOnce runs Part 1 (facts) then Part 2 (agent project) and optional extras.
 func (r *Runner) CollectOnce() {
 	r.collectAndProject()
 	r.emitCursorAgent()
 	r.emitHTTP()
+	r.emitProbes()
+	r.emitAISummaries()
+	r.emitAIDiscover()
 }
 
 func (r *Runner) collectAndProject() {
@@ -142,10 +169,10 @@ func (r *Runner) emitHeartbeatAlive() {
 		Summary: "alive", Severity: "normal", TTLSeconds: &ttl,
 	})
 	r.enqueue(event.TypeStatusUpsert, selfServiceKey, "", event.StatusUpsert{
-		Items: []event.StatusItem{
+		Items: append([]event.StatusItem{
 			{Key: "uptime", Label: "系统运行时间", Value: json.RawMessage(itoa(r.col.Uptime())), ValueType: "duration", Unit: "s", Severity: "normal", DisplayFormat: "duration", SortOrder: 10},
 			{Key: "spool_queue", Label: "待发送队列", Value: json.RawMessage(itoa(int64(n))), ValueType: "number", Severity: sevForQueue(n), DisplayFormat: "number", SortOrder: 20},
-		},
+		}, aiinspect.LoadBudget(r.sp).StatusItems()...),
 	})
 }
 
@@ -200,6 +227,40 @@ func (r *Runner) Run(ctx context.Context) {
 	r.emitSelfLog("board-client 启动，开始采集系统快照。", "info")
 
 	var wg sync.WaitGroup
+	if r.cfg.LocalIngestOn() {
+		srv, err := localingest.New(r.log, r.cfg.LocalIngest.Listen)
+		if err != nil {
+			r.log.Warn("local ingest disabled", "err", err)
+		} else {
+			srv.OnEvent = func(env event.Envelope) {
+				r.ingestProjectCopy(env)
+				if env.EventType != event.TypeLogAppend {
+					return
+				}
+				var lp event.LogPayload
+				_ = json.Unmarshal(env.Payload, &lp)
+				src := lp.Source
+				if src == "" {
+					src = "agent_logs"
+				}
+				_ = r.logBuf.Append(aiinspect.Entry{
+					ServiceKey: env.ServiceKey,
+					Markdown:   lp.Markdown,
+					Severity:   lp.Severity,
+					OccurredAt: env.OccurredAt,
+					Source:     src,
+				})
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := srv.Start(ctx, r.cfg.LocalIngest.AdvertisePath); err != nil {
+					r.log.Warn("local ingest stopped", "err", err)
+				}
+			}()
+		}
+	}
+
 	wg.Add(1)
 	go func() { defer wg.Done(); r.senderLoop(ctx) }()
 
@@ -211,10 +272,12 @@ func (r *Runner) Run(ctx context.Context) {
 	hbT := time.NewTicker(r.cfg.Intervals.Heartbeat.Duration)
 	curT := time.NewTicker(r.cfg.Intervals.CursorAgent.Duration)
 	httpT := time.NewTicker(r.cfg.Intervals.HTTP.Duration)
+	sideT := time.NewTicker(r.sideInterval())
 	defer collectT.Stop()
 	defer hbT.Stop()
 	defer curT.Stop()
 	defer httpT.Stop()
+	defer sideT.Stop()
 
 	for {
 		select {
@@ -229,6 +292,10 @@ func (r *Runner) Run(ctx context.Context) {
 			r.emitCursorAgent()
 		case <-httpT.C:
 			r.emitHTTP()
+		case <-sideT.C:
+			r.emitProbes()
+			r.emitAISummaries()
+			r.emitAIDiscover()
 		}
 	}
 }
@@ -319,12 +386,21 @@ func (r *Runner) emitCursorAgent() {
 	}
 	r.saveCursorSeen(seen)
 	if cfg.PinSummary && len(bodies) > 0 {
-		md := summarize.Logs(cfg.ServiceName+" 日志总结", bodies)
-		r.enqueue(event.TypeLogPin, cfg.ServiceKey, "", event.LogPayload{
-			Markdown: md,
-			Severity: "info",
-			Source:   "cursor-agent",
-		})
+		if r.cfg.AI.Enabled {
+			src := config.AISummarize{
+				Source: "cursor_transcript", ServiceKey: cfg.ServiceKey,
+				Name: cfg.ServiceName + " 日志总结", MinNewLogs: 1,
+			}
+			evs := aiinspect.SummarizeText(context.Background(), r.sp, r.ensureProvider(), r.cfg.AI, src, bodies, strings.Join(bodies, "\n"))
+			r.enqueueOut(evs)
+		} else {
+			md := summarize.Logs(cfg.ServiceName+" 日志总结", bodies)
+			r.enqueue(event.TypeLogPin, cfg.ServiceKey, "", event.LogPayload{
+				Markdown: md,
+				Severity: "info",
+				Source:   "cursor-agent",
+			})
+		}
 	}
 }
 
@@ -455,4 +531,183 @@ func sevForQueue(n int) string {
 		return "warning"
 	}
 	return "normal"
+}
+
+func (r *Runner) ensureProvider() aiprovider.Provider {
+	if r.provider != nil {
+		return r.provider
+	}
+	if r.cfg == nil || !r.cfg.AI.Enabled {
+		return nil
+	}
+	p, err := aiprovider.New(aiprovider.Options{
+		Provider:  r.cfg.AI.Provider,
+		Command:   r.cfg.AI.Command,
+		Model:     r.cfg.AI.Model,
+		APIKeyEnv: r.cfg.AI.APIKeyEnv,
+		Workspace: r.cfg.AI.Workspace,
+	})
+	if err != nil {
+		r.log.Warn("ai provider disabled", "err", err)
+		return nil
+	}
+	r.provider = p
+	return r.provider
+}
+
+func (r *Runner) enqueueOut(evs []aiinspect.OutEvent) {
+	for _, e := range evs {
+		r.enqueue(e.Type, e.ServiceKey, "", e.Payload)
+	}
+}
+
+func (r *Runner) due(last time.Time, every time.Duration) bool {
+	if every <= 0 {
+		every = time.Minute
+	}
+	if last.IsZero() {
+		return true
+	}
+	return time.Since(last) >= every
+}
+
+func (r *Runner) sideInterval() time.Duration {
+	d := 15 * time.Second
+	if r.cfg.AI.Enabled {
+		for _, src := range r.cfg.AI.Summarize {
+			if src.Interval.Duration > 0 && src.Interval.Duration < d {
+				d = src.Interval.Duration
+			}
+		}
+		if r.cfg.AI.Discover.Enabled && r.cfg.AI.Discover.Interval.Duration > 0 && r.cfg.AI.Discover.Interval.Duration < d {
+			d = r.cfg.AI.Discover.Interval.Duration
+		}
+	}
+	if r.cfg.Collectors.Probes.Enabled {
+		for _, s := range r.cfg.Collectors.Probes.Scripts {
+			if s.Interval.Duration > 0 && s.Interval.Duration < d {
+				d = s.Interval.Duration
+			}
+		}
+	}
+	if d < time.Second {
+		d = time.Second
+	}
+	return d
+}
+
+func (r *Runner) emitProbes() {
+	cfg := r.cfg.Collectors.Probes
+	if !cfg.Enabled {
+		return
+	}
+	now := time.Now()
+	for _, s := range cfg.Scripts {
+		r.mu.Lock()
+		last := r.lastProbe[s.ServiceKey]
+		r.mu.Unlock()
+		if !r.due(last, s.Interval.Duration) {
+			continue
+		}
+		r.mu.Lock()
+		r.lastProbe[s.ServiceKey] = now
+		r.mu.Unlock()
+		out, trunc, err := probe.RunScript(context.Background(), s.Command, s.Timeout.Duration, s.MaxBytes)
+		if err != nil {
+			for _, e := range probe.FailedState(s.ServiceKey, s.Name, err.Error(), s.TTLSeconds) {
+				r.enqueue(e.Type, e.ServiceKey, "", e.Payload)
+			}
+			r.enqueue(event.TypeCollectorNotice, "", "", event.CollectorNotice{
+				Severity: "warning", Code: "probe_failed",
+				Markdown: "probe " + s.ServiceKey + ": " + err.Error(),
+			})
+			continue
+		}
+		if strings.EqualFold(s.Format, "text") {
+			text := string(out)
+			if trunc {
+				text += "\n…(truncated)"
+			}
+			ttl := s.TTLSeconds
+			r.enqueue(event.TypeServiceState, s.ServiceKey, "", event.ServiceState{
+				Name: s.Name, Type: "virtual", State: "running",
+				Summary: "probe ok", Severity: "normal", TTLSeconds: &ttl,
+			})
+			appendLog := s.AppendLog == nil || *s.AppendLog
+			if appendLog {
+				r.enqueue(event.TypeLogAppend, s.ServiceKey, "", event.LogPayload{
+					Markdown: text, Severity: "info", Source: "probe",
+				})
+			}
+			_ = r.logBuf.Append(aiinspect.Entry{
+				ServiceKey: s.ServiceKey, Markdown: text, Severity: "info",
+				Source: "probe:" + s.ServiceKey,
+			})
+			continue
+		}
+		parsed, err := probe.ParseJSON(out)
+		if err != nil {
+			for _, e := range probe.FailedState(s.ServiceKey, s.Name, err.Error(), s.TTLSeconds) {
+				r.enqueue(e.Type, e.ServiceKey, "", e.Payload)
+			}
+			continue
+		}
+		if trunc {
+			parsed.Summary += " (truncated)"
+		}
+		r.mu.Lock()
+		prev := r.probePin[s.ServiceKey]
+		r.mu.Unlock()
+		evs, newHash := probe.MapJSON(s.ServiceKey, s.Name, s.TTLSeconds, parsed, prev)
+		r.mu.Lock()
+		r.probePin[s.ServiceKey] = newHash
+		r.mu.Unlock()
+		for _, e := range evs {
+			r.enqueue(e.Type, e.ServiceKey, "", e.Payload)
+		}
+	}
+}
+
+func (r *Runner) emitAISummaries() {
+	if !r.cfg.AI.Enabled {
+		return
+	}
+	p := r.ensureProvider()
+	now := time.Now()
+	for _, src := range r.cfg.AI.Summarize {
+		r.mu.Lock()
+		last := r.lastSum[src.ServiceKey]
+		r.mu.Unlock()
+		if !r.due(last, src.Interval.Duration) {
+			continue
+		}
+		r.mu.Lock()
+		r.lastSum[src.ServiceKey] = now
+		r.mu.Unlock()
+		var evs []aiinspect.OutEvent
+		if src.Source == "cursor_transcript" {
+			files := collector.ScanTranscripts(r.cfg.Collectors.CursorAgent.Paths)
+			bodies, joined := aiinspect.TranscriptBodies(files)
+			evs = aiinspect.SummarizeText(context.Background(), r.sp, p, r.cfg.AI, src, bodies, joined)
+		} else {
+			evs = aiinspect.SummarizeOne(context.Background(), r.sp, r.logBuf, p, r.cfg.AI, src)
+		}
+		r.enqueueOut(evs)
+	}
+}
+
+func (r *Runner) emitAIDiscover() {
+	if !r.cfg.AI.Enabled || !r.cfg.AI.Discover.Enabled {
+		return
+	}
+	every := r.cfg.AI.Discover.Interval.Duration
+	if every <= 0 {
+		every = r.cfg.Intervals.AIDiscover.Duration
+	}
+	if !r.due(r.lastDisc, every) {
+		return
+	}
+	r.lastDisc = time.Now()
+	evs := aiinspect.Discover(context.Background(), r.sp, r.ensureProvider(), r.cfg.AI, r.runCmd)
+	r.enqueueOut(evs)
 }

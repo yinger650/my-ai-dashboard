@@ -30,6 +30,25 @@ func TestCardPinsKeepCurrentState(t *testing.T) {
 	}
 }
 
+func TestKeepTextBoardStatus(t *testing.T) {
+	if keepTextBoardStatus(store.CurrentStatus{StatusKey: "alive", Severity: "error"}) {
+		t.Fatal("telemetry should stay hidden")
+	}
+	if keepTextBoardStatus(store.CurrentStatus{StatusKey: "probe", Severity: "normal"}) {
+		t.Fatal("healthy probe should stay hidden")
+	}
+	if !keepTextBoardStatus(store.CurrentStatus{StatusKey: "probe", Severity: "error"}) {
+		t.Fatal("down probe should show")
+	}
+	parts := textBoardStatusParts([]store.CurrentStatus{
+		{StatusKey: "alive", Label: "存活", Severity: "normal", ServiceKey: "cursor", ValueJSON: "true"},
+		{StatusKey: "ssl_days", Label: "证书", Severity: "warning", ServiceKey: "site-web", ValueJSON: "8"},
+	})
+	if len(parts) != 1 || !strings.Contains(parts[0], "证书") {
+		t.Fatalf("%q", parts)
+	}
+}
+
 func TestStatusValueText(t *testing.T) {
 	unit := "%"
 	got := statusValueText(store.CurrentStatus{ValueJSON: "12.5", Unit: &unit})

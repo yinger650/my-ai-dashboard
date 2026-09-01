@@ -1,4 +1,5 @@
 import type { BoardService, LogEntry, PinnedLog } from "../types";
+import { dropServiceSuffixDupes, visibleHostServices } from "./host-services";
 
 const CARD_SERVICE_ORDER = [
   "host-inspect",
@@ -12,15 +13,11 @@ const CARD_SERVICE_ORDER = [
 
 const CARD_PIN_KEYS = new Set(["host-listen", "nginx", "docker", "cron"]);
 
-export function compactCardServices(services: BoardService[]): BoardService[] {
-  const byKey = new Map(services.map((s) => [s.service_key, s]));
-  const filtered = services.filter((s) => {
-    if (s.service_key.endsWith(".service")) {
-      const bare = s.service_key.slice(0, -".service".length);
-      if (byKey.has(bare)) return false;
-    }
-    return true;
-  });
+export function compactCardServices(
+  services: BoardService[],
+  host?: { kind?: string | null; machineLastSeenAt?: string | null },
+): BoardService[] {
+  const filtered = dropServiceSuffixDupes(visibleHostServices(services, host ?? {}));
   const rank = (key: string) => {
     const i = CARD_SERVICE_ORDER.indexOf(key);
     return i === -1 ? 100 : i;

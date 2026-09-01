@@ -85,6 +85,19 @@ type Run struct {
 	UpdatedAt       string  `json:"updated_at"`
 }
 
+// ActiveRun is a non-terminal run shown on the board.
+type ActiveRun struct {
+	ID          string  `json:"id"`
+	ServiceID   string  `json:"service_id"`
+	ServiceKey  string  `json:"service_key"`
+	ServiceName string  `json:"service_name"`
+	RunKey      string  `json:"run_key"`
+	Status      string  `json:"status"`
+	Summary     string  `json:"summary"`
+	StartedAt   *string `json:"started_at"`
+	CreatedAt   string  `json:"created_at"`
+}
+
 // MetricSample mirrors metric_samples.
 type MetricSample struct {
 	OccurredAt         string   `json:"occurred_at"`

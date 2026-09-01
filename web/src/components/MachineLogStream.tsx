@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Pin } from "lucide-react";
+import { ArrowUp } from "lucide-react";
 import { apiGetPage } from "../api";
 import type { LogEntry, MachineLogsPage, PinnedLog } from "../types";
 import { compactCardPins, isCardNoiseLog } from "../lib/board-card";
 import { countNewLogs, mergeLogPages } from "../lib/logs";
 import { CollapsibleText } from "./CollapsibleText";
+import { PinnedLogBar } from "./PinnedLogBar";
 import { SevDot } from "./Severity";
 import { localTime } from "../format";
 import { Button } from "./ui/button";
@@ -19,6 +20,7 @@ export function MachineLogStream({
   initialLogs,
   initialPinned,
   compact = false,
+  onLogsChange,
 }: {
   machineId: string;
   autoRefresh: boolean;
@@ -26,6 +28,7 @@ export function MachineLogStream({
   initialLogs: LogEntry[];
   initialPinned: PinnedLog[];
   compact?: boolean;
+  onLogsChange?: (logs: LogEntry[]) => void;
 }) {
   const filterLogs = (rows: LogEntry[]) => (compact ? rows.filter((l) => !isCardNoiseLog(l)) : rows);
   const filterPins = (rows: PinnedLog[]) => (compact ? compactCardPins(rows) : rows);
@@ -45,6 +48,10 @@ export function MachineLogStream({
   const olderRef = useRef<LogEntry[]>([]);
   const loadingRef = useRef(false);
   logsRef.current = logs;
+
+  useEffect(() => {
+    onLogsChange?.(logs);
+  }, [logs, onLogsChange]);
 
   const fetchLatest = useCallback(
     async (opts: { jump?: boolean } = {}) => {
@@ -151,55 +158,42 @@ export function MachineLogStream({
           {newCount > 0 ? `${newCount} 条新日志 · 回到顶部` : "回到顶部刷新"}
         </button>
       </div>
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        className="log-pane min-h-0 flex-1 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1.5 font-mono text-[12px] leading-relaxed"
-      >
-        {pinned.length > 0 && (
-          <div className="sticky top-0 z-10 mb-2 space-y-1 border-b border-slate-800 bg-slate-950/95 pb-2">
-            {pinned.map((p, i) => (
-              <div key={p.event_id ?? `${p.occurred_at}-${i}`} className="rounded bg-indigo-500/10 px-2 py-1">
-                <div className="mb-0.5 flex items-center gap-1 text-[10px] text-indigo-300">
-                  <Pin className="h-3 w-3" />
-                  置顶
-                  {p.service_name && <span className="text-slate-500">· {p.service_name}</span>}
-                  <span className="ml-auto text-slate-500">{localTime(p.occurred_at)}</span>
-                </div>
-                <CollapsibleText text={p.markdown} maxChars={compact ? 400 : 180} />
+      <PinnedLogBar pins={pinned}>
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="log-pane absolute inset-0 overflow-y-scroll rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1.5 font-mono text-[12px] leading-relaxed"
+        >
+          {logs.length === 0 && pinned.length === 0 && (
+            <div className="py-6 text-center text-slate-600">暂无日志</div>
+          )}
+          {logs.map((l) => (
+            <div key={l.event_id} className="border-b border-slate-900/80 py-1.5 last:border-0">
+              <div className="mb-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
+                <SevDot severity={l.severity} />
+                <span className={`sev-${l.severity}`}>{l.severity}</span>
+                <span>{localTime(l.occurred_at)}</span>
+                {l.service_name && <span className="rounded bg-slate-800 px-1">{l.service_name}</span>}
+                {l.source && <span>{l.source}</span>}
               </div>
-            ))}
-          </div>
-        )}
-        {logs.length === 0 && pinned.length === 0 && (
-          <div className="py-6 text-center text-slate-600">暂无日志</div>
-        )}
-        {logs.map((l) => (
-          <div key={l.event_id} className="border-b border-slate-900/80 py-1.5 last:border-0">
-            <div className="mb-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
-              <SevDot severity={l.severity} />
-              <span className={`sev-${l.severity}`}>{l.severity}</span>
-              <span>{localTime(l.occurred_at)}</span>
-              {l.service_name && <span className="rounded bg-slate-800 px-1">{l.service_name}</span>}
-              {l.source && <span>{l.source}</span>}
+              <CollapsibleText text={l.markdown} />
             </div>
-            <CollapsibleText text={l.markdown} />
-          </div>
-        ))}
-        {hasMore && (
-          <div className="py-2 text-center">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={loadingMore}
-              onClick={() => void loadMore()}
-            >
-              {loadingMore ? "加载中…" : "加载更早日志"}
-            </Button>
-          </div>
-        )}
-      </div>
+          ))}
+          {hasMore && (
+            <div className="py-2 text-center">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={loadingMore}
+                onClick={() => void loadMore()}
+              >
+                {loadingMore ? "加载中…" : "加载更早日志"}
+              </Button>
+            </div>
+          )}
+        </div>
+      </PinnedLogBar>
     </div>
   );
 }

@@ -32,11 +32,22 @@ func (s *Server) handleMachineDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	latest, _ := s.st.LatestMetric(r.Context(), id)
 	health, resSev := machineHealth(m, latest, time.Now().UTC())
+	statuses, _ := s.st.ListStatusesByMachine(r.Context(), id)
+	if statuses == nil {
+		statuses = []store.CurrentStatus{}
+	}
+	activeRuns, _ := s.st.ListActiveRunsByMachine(r.Context(), id)
+	if activeRuns == nil {
+		activeRuns = []store.ActiveRun{}
+	}
 	api.WriteData(w, rid, map[string]any{
 		"machine":           m,
 		"latest_metric":     latest,
 		"health":            health,
 		"resource_severity": resSev,
+		"heartbeat_metrics": store.ParseHeartbeatMetrics(m.MetadataJSON),
+		"statuses":          statuses,
+		"active_runs":       activeRuns,
 	}, nil)
 }
 
