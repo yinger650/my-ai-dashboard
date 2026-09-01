@@ -58,6 +58,15 @@ func TestLoadAndValidate(t *testing.T) {
 	if !strings.HasSuffix(c.LocalIngest.AdvertisePath, "local-ingest.json") {
 		t.Errorf("advertise = %q", c.LocalIngest.AdvertisePath)
 	}
+	if c.Update.Enabled {
+		t.Fatal("update should default off")
+	}
+	if c.Update.URL != "https://github.com/yinger650/my-ai-dashboard/releases/latest/download" {
+		t.Errorf("update url = %q", c.Update.URL)
+	}
+	if c.Update.Interval.Duration != time.Hour {
+		t.Errorf("update interval = %v", c.Update.Interval.Duration)
+	}
 }
 
 func TestLoadHTTPTargets(t *testing.T) {
@@ -205,6 +214,28 @@ collectors:
 	}
 	if _, err := Load(p); err == nil {
 		t.Fatal("relative probe path should fail")
+	}
+}
+
+func TestUpdateRejectsBadURL(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	t.Setenv("TEST_TOKEN_VAR", "abp_m_secret")
+	src := `version: 1
+server:
+  url: "http://127.0.0.1:8080"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "dev"
+update:
+  enabled: true
+  url: "not-a-url"
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected invalid update.url")
 	}
 }
 

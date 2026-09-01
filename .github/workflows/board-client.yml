@@ -1,0 +1,67 @@
+name: board-client
+
+on:
+  push:
+    paths:
+      - "cmd/board-client/**"
+      - "internal/client/**"
+      - "internal/event/**"
+      - "internal/shared/**"
+      - "internal/summarize/**"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - "scripts/client-manifest.py"
+      - ".github/workflows/board-client.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build linux amd64 and arm64
+        run: make dist-client
+        env:
+          COMMIT: ${{ github.sha }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: board-client-linux
+          path: dist/client/*
+          if-no-files-found: error
+
+      - name: Publish rolling GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="Rolling linux board-client from \`${GITHUB_SHA}\` on \`${GITHUB_REF_NAME}\`.
+
+          Assets:
+          - \`board-client-linux-amd64\`
+          - \`board-client-linux-arm64\`
+          - \`manifest.json\`
+          - \`SHA256SUMS\`
+
+          Clients with \`update.enabled: true\` pull \`manifest.json\` from this release."
+          if gh release view board-client >/dev/null 2>&1; then
+            gh release upload board-client dist/client/* --clobber
+            gh release edit board-client --title "board-client" --notes "${notes}" --target "${GITHUB_SHA}" --latest
+          else
+            gh release create board-client dist/client/* \
+              --title "board-client" \
+              --notes "${notes}" \
+              --target "${GITHUB_SHA}" \
+              --latest
+          fi

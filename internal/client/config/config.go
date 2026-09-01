@@ -107,7 +107,15 @@ type Config struct {
 		Listen        string `yaml:"listen"`
 		AdvertisePath string `yaml:"advertise_path"`
 	} `yaml:"local_ingest"`
-	AI AIConfig `yaml:"ai"`
+	AI     AIConfig     `yaml:"ai"`
+	Update UpdateConfig `yaml:"update"`
+}
+
+// UpdateConfig pulls a newer board-client from a GitHub Release.
+type UpdateConfig struct {
+	Enabled  bool     `yaml:"enabled"`
+	URL      string   `yaml:"url"`
+	Interval Duration `yaml:"interval"`
 }
 
 // PromoteRule maps a listening process name to a Board daemon service.
@@ -420,6 +428,12 @@ func (c *Config) applyDefaults() {
 		}
 		c.LocalIngest.AdvertisePath = filepath.Join(dir, "local-ingest.json")
 	}
+	if c.Update.URL == "" {
+		c.Update.URL = "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
+	}
+	if c.Update.Interval.Duration == 0 {
+		c.Update.Interval.Duration = time.Hour
+	}
 }
 
 func (c *Config) validate() error {
@@ -517,6 +531,12 @@ func (c *Config) validate() error {
 					return fmt.Errorf("ai.discover.allow_commands[%d].allow_paths is required for {path}", i)
 				}
 			}
+		}
+	}
+	if c.Update.Enabled {
+		u, err := url.Parse(c.Update.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("update.url must be an http(s) URL")
 		}
 	}
 	if c.Collectors.Probes.Enabled {

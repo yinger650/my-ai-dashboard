@@ -26,6 +26,11 @@ intervals:
   cursor_agent: 5m
   http: 60s
 
+update:
+  enabled: true
+  url: "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
+  interval: 1h
+
 local_ingest:
   enabled: true
   listen: "127.0.0.1:7438"

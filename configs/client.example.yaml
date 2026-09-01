@@ -31,6 +31,11 @@ local_ingest:
   # Loopback copy of agent events. board-client projects them to proj-*
   # with this client's token and tees log.append for AI digest.
 
+update:
+  enabled: false
+  url: "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
+  interval: 1h
+
 collectors:
   cpu: true
   memory: true

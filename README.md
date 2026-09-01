@@ -89,6 +89,24 @@ systemctl enable --now board-client
 
 每个探测目标会在该机器下自动创建一条 **virtual** 服务：正常为 `running`，非期望状态码 / 超时 / 连接失败为 `failed`，并带上 HTTP 状态码、延迟、证书剩余天数。状态变化时写一条日志。探测间隔默认 60 秒。
 
+## 客户端自动编译与升级
+
+GitHub Actions（`.github/workflows/board-client.yml`）在 client 相关提交后交叉编译：
+
+- `board-client-linux-amd64`
+- `board-client-linux-arm64`
+
+并发布到滚动 Release：<https://github.com/yinger650/my-ai-dashboard/releases/latest>。
+
+生产 `deploy/client.yaml` 已打开自动升级。客户端会按 `update.interval`（默认 1 小时）对照 `manifest.json` 的 commit，下载、校验 SHA-256 后替换自身。本地 `go run` 请保持 `update.enabled: false`。
+
+手动编译：
+
+```bash
+make dist-client
+# 产物在 dist/client/
+```
+
 ## 本地开发（后端 + 前端 + 客户端同步运行）
 
 ```bash
