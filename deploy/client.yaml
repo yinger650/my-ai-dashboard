@@ -28,6 +28,11 @@ local_ingest:
   listen: "127.0.0.1:7438"
   advertise_path: "/var/lib/agentboard-client/local-ingest.json"
 
+update:
+  enabled: true
+  url: "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
+  interval: 1h
+
 collectors:
   cpu: true
   memory: true

@@ -13,6 +13,7 @@ import (
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/runner"
 	"agentboard/internal/client/spool"
+	"agentboard/internal/client/update"
 )
 
 var (
@@ -99,6 +100,7 @@ func runClient(cfgPath string) error {
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	r := runner.New(cfg, sp, log)
+	r.Build = update.Info{Version: version, Commit: commit}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -109,6 +111,7 @@ func runClient(cfgPath string) error {
 		"version", version,
 		"commit", commit,
 		"build_time", buildTime,
+		"auto_update", cfg.Update.Enabled,
 	)
 	r.Run(ctx)
 	log.Info("board-client stopped")
@@ -148,6 +151,11 @@ local_ingest:
   advertise_path: "/var/lib/agentboard-client/local-ingest.json"
   # Loopback copy of agent events. board-client projects them to proj-*
   # with this client's token and tees log.append for AI digest.
+
+update:
+  enabled: false
+  url: "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
+  interval: 1h
 
 collectors:
   cpu: true

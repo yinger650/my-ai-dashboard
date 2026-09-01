@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"agentboard/internal/client/projreport"
 	"agentboard/internal/client/sender"
 	"agentboard/internal/client/spool"
+	"agentboard/internal/client/update"
 	"agentboard/internal/event"
 	"agentboard/internal/shared"
 	"agentboard/internal/summarize"
@@ -59,6 +61,8 @@ type Runner struct {
 	lastSum   map[string]time.Time
 	lastDisc  time.Time
 	probePin  map[string]string
+
+	Build update.Info
 }
 
 // New constructs a Runner.
@@ -263,6 +267,10 @@ func (r *Runner) Run(ctx context.Context) {
 
 	wg.Add(1)
 	go func() { defer wg.Done(); r.senderLoop(ctx) }()
+	if r.cfg.Update.Enabled {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.updateLoop(ctx) }()
+	}
 
 	collectEvery := r.cfg.Intervals.Collect.Duration
 	if collectEvery <= 0 {
@@ -452,6 +460,53 @@ func (r *Runner) emitHTTP() {
 			Severity: sev,
 			Source:   "http-probe",
 		})
+	}
+}
+
+func (r *Runner) updateLoop(ctx context.Context) {
+	first := 15 * time.Second
+	t := time.NewTimer(first)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.maybeUpdate(ctx)
+			every := r.cfg.Update.Interval.Duration
+			if every <= 0 {
+				every = time.Hour
+			}
+			t.Reset(every)
+		}
+	}
+}
+
+func (r *Runner) maybeUpdate(ctx context.Context) {
+	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
+		return
+	}
+	timeout := r.cfg.Server.Timeout.Duration
+	if timeout < 45*time.Second {
+		timeout = 45 * time.Second
+	}
+	up := update.New(r.cfg.Update.URL, r.Build, timeout)
+	man, bin, needed, err := up.Check(ctx)
+	if err != nil {
+		r.log.Warn("client update check failed", "err", err)
+		return
+	}
+	if !needed {
+		r.log.Debug("board-client is current", "commit", r.Build.Commit)
+		return
+	}
+	msg := "正在升级 board-client 到 " + man.Version + " (" + man.Commit + ")"
+	r.log.Info("applying board-client update", "version", man.Version, "commit", man.Commit, "asset", bin.Name)
+	r.emitSelfLog(msg, "info")
+	r.drainOnce(ctx)
+	if err := up.Apply(ctx, bin); err != nil {
+		r.log.Warn("client update failed", "err", err)
+		r.emitSelfLog("board-client 升级失败："+err.Error(), "warning")
 	}
 }
 

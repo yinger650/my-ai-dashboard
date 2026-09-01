@@ -8,7 +8,7 @@
 >
 > 基线：1.0（2026-08-18，见 [archive/agentboard-personal-design-spec-v1.0.md](archive/agentboard-personal-design-spec-v1.0.md)）；1.1 为 2026-08-26 对照实现修订
 >
-> 对应仓库版本：`board-server` / `board-client` **0.1.9**（`Makefile` `LDFLAGS`）；客户端心跳上报 `collector_version` 为 **1.3.1**
+> 对应仓库版本：`board-server` / `board-client` **0.1.10**（`Makefile` `VERSION`）；客户端心跳上报 `collector_version` 为 **1.3.1**
 >
 > 生产地址：<https://board.yinger650.com>
 >
@@ -888,6 +888,10 @@ intervals:
   systemd: 60s
   cursor_agent: 5m
   http: 60s
+update:
+  enabled: false
+  url: "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
+  interval: 1h
 ai:
   enabled: false
   provider: cursor-agent        # cursor-agent | codex | command
@@ -1111,6 +1115,12 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 客户端映射为 `service.state` / `status.upsert` / `log.append` / `log.pin`（pin 按 markdown SHA-256 去重）。非零退出 → `service.state=failed` + `severity=error`。
 
 脚本必须：绝对路径、存在、可执行、**不可被 group/other 写**；超时默认 15s；stdout 默认上限 64KiB（超出截断并标记）。失败写 `collector.notice`。
+
+### 14.11 客户端自动升级（linux amd64 / arm64）
+
+与 client 相关的提交由 GitHub Actions 交叉编译 `board-client-linux-amd64` 与 `board-client-linux-arm64`，覆盖滚动 Release 标签 `board-client`（`/releases/latest`）。产物含 `manifest.json` 与 `SHA256SUMS`。
+
+客户端配置 `update.enabled: true` 后，启动约 15 秒及之后每隔 `update.interval`（默认 1h）拉取 `manifest.json`。若远程 `commit` 与本机 ldflags 不同，则下载对应 `GOARCH` 二进制、校验 SHA-256、替换当前可执行文件并 `exec`。开发用 `go run` 应保持 `enabled: false`。当前只支持 linux `amd64` / `arm64`。
 
 ## 15. Cursor 与 Agent 集成
 
