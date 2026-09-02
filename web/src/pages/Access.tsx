@@ -15,7 +15,7 @@ export function AccessPage() {
   return (
     <div>
       <div className="mb-5 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">访问记录</h1>
+        <h1 className="text-xl font-semibold tracking-tight">访问记录</h1>
         <label className="flex items-center gap-2 text-sm text-slate-400">
           <input type="checkbox" checked={abnormalOnly} onChange={(e) => setAbnormalOnly(e.target.checked)} />
           只看异常

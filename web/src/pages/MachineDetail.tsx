@@ -84,7 +84,7 @@ export function MachineDetailPage() {
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold">{m.name}</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{m.name}</h1>
             <HealthBadge health={detail.data!.health} />
           </div>
           <p className="text-sm text-slate-400">

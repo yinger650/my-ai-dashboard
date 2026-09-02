@@ -41,8 +41,9 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-indigo-400">◆ AgentBoard Personal</CardTitle>
-          <CardDescription>管理员登录</CardDescription>
+          <p className="ab-eyebrow">AgentBoard Personal</p>
+          <CardTitle className="mt-1">登录控制台</CardTitle>
+          <CardDescription>输入管理员密码进入看板</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit}>

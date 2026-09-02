@@ -1,7 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
+  --ink: #0b1020;
+  --panel: #0f1626;
+  --hairline: #1f2a44;
+  --text: #e6ebf5;
+  --muted: #8b97ad;
+  --accent: #818cf8;
 }
 
 html,
@@ -12,10 +18,11 @@ body,
 
 body {
   margin: 0;
-  background: #0b1020;
-  color: #e6ebf5;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+  background: var(--ink);
+  color: var(--text);
+  font-family: "IBM Plex Sans", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
     "PingFang SC", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0.01em;
 }
 
 /* Status colors (spec 16.1). Applied to text/borders/dots. */
@@ -33,10 +40,44 @@ body {
 .bg-sev-unknown { background-color: #9ca3af; }
 .bg-sev-offline { background-color: #6b7280; }
 
-.card {
-  background: #0f1626;
-  border: 1px solid #1f2a44;
-  border-radius: 14px;
+.card,
+.ab-panel {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+}
+
+.ab-eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.run-channel {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 0.6rem;
+  border-left: 2px solid transparent;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.run-channel:hover {
+  background: rgba(129, 140, 248, 0.06);
+}
+
+.run-channel:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -2px;
+}
+
+.run-channel.is-on {
+  border-left-color: var(--accent);
+  background: rgba(129, 140, 248, 0.1);
 }
 
 .log-pane {
@@ -70,7 +111,7 @@ body {
 
 .react-grid-item.react-grid-placeholder {
   background: #6366f1;
-  border-radius: 12px;
+  border-radius: 10px;
   opacity: 0.18;
 }
 
@@ -96,6 +137,14 @@ body {
   padding: 0.1rem 0.3rem;
   border-radius: 4px;
   font-size: 0.85em;
+  font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.markdown-body pre {
+  overflow-x: auto;
+  background: #0b1020;
+  border: 1px solid #1f2a44;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
 }
 .markdown-body a { color: #60a5fa; text-decoration: underline; }
 .markdown-body table {
@@ -111,3 +160,7 @@ body {
   vertical-align: top;
 }
 .markdown-body th { color: #94a3b8; font-weight: 600; }
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.25rem 0 0.25rem 1.1rem;
+}

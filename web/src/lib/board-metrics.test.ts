@@ -52,6 +52,11 @@ describe("collectPercentMetrics", () => {
     ]).map((s) => s.status_key)).toEqual(["alive"]);
   });
 
+  it("labels data_dir as 目录占用", () => {
+    const rows = collectPercentMetrics({ heartbeat_metrics: { data_dir: 41 } });
+    expect(rows).toEqual([{ key: "data_dir", label: "目录占用", value: 41 }]);
+  });
+
   it("includes host cpu/mem/disk only when present", () => {
     const rows = collectPercentMetrics({
       latest_metric: {
