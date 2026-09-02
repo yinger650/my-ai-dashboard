@@ -42,6 +42,7 @@ type Meta struct {
 	SpoolQueued      int
 	Arch             string
 	Promote          []config.PromoteRule
+	HeartbeatMeta    map[string]any
 }
 
 // State is remembered across collect rounds so pins and logs only fire on change.
@@ -54,6 +55,7 @@ type State struct {
 	CronSeen         map[string]bool   `json:"cron_seen"`
 	CronOffsets      map[string]int64  `json:"cron_offsets"`
 	CronPrimed       bool              `json:"cron_primed"`
+	AuditRunKeys     []string          `json:"audit_run_keys,omitempty"`
 }
 
 // NewState returns an empty projection state.
@@ -81,6 +83,7 @@ func Project(snap hostsnap.Snapshot, prev *State, meta Meta) ([]Event, *State) {
 		CronSeen:         copyBoolMap(prev.CronSeen),
 		CronOffsets:      copyInt64Map(prev.CronOffsets),
 		CronPrimed:       prev.CronPrimed,
+		AuditRunKeys:     append([]string(nil), prev.AuditRunKeys...),
 	}
 	var evs []Event
 	evs = append(evs, machineEvents(snap, meta)...)
@@ -107,6 +110,7 @@ func machineEvents(snap hostsnap.Snapshot, meta Meta) []Event {
 			CollectorVersion:         "1.3.1",
 			HeartbeatIntervalSeconds: meta.HeartbeatSeconds,
 			UptimeSeconds:            meta.UptimeSeconds,
+			Metadata:                 meta.HeartbeatMeta,
 		}},
 		{Type: event.TypeMetricSample, Payload: snap.Metric},
 	}
@@ -131,7 +135,7 @@ func selfEvents(meta Meta) []Event {
 	return []Event{
 		{Type: event.TypeServiceState, ServiceKey: SelfKey, Payload: event.ServiceState{
 			Name: "Board Client", Type: "daemon", State: "running",
-			Summary: "collecting snapshot", Severity: "normal",
+			Summary: "", Severity: "normal",
 		}},
 		{Type: event.TypeStatusUpsert, ServiceKey: SelfKey, Payload: event.StatusUpsert{
 			Items: []event.StatusItem{

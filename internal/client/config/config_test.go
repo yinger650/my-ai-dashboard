@@ -247,3 +247,143 @@ func TestValidateRejectsBadKeyAndMissingToken(t *testing.T) {
 		t.Fatal("expected validation error for bad key / missing token")
 	}
 }
+
+func TestTokenPrefersEnvOverYAML(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	src := `version: 1
+server:
+  url: "http://127.0.0.1:8080"
+  machine_token: "abp_m_from_yaml_value"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "home-server"
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_TOKEN_VAR", "abp_m_from_env_value")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Token() != "abp_m_from_env_value" {
+		t.Fatalf("token=%q", c.Token())
+	}
+
+	t.Setenv("TEST_TOKEN_VAR", "")
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Token() != "abp_m_from_yaml_value" {
+		t.Fatalf("yaml token=%q", c.Token())
+	}
+}
+
+func TestPlaceholderTokenIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	src := `version: 1
+server:
+  url: "http://127.0.0.1:8080"
+  machine_token: "abp_m_REPLACE_ME"
+  machine_token_env: "MISSING_TOKEN_VAR"
+machine:
+  key: "home-server"
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("placeholder must not count as a token")
+	}
+	c, err := Read(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Token() != "" {
+		t.Fatalf("placeholder token=%q", c.Token())
+	}
+}
+
+func TestStatusProbesIntentOrCommand(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	t.Setenv("TEST_TOKEN_VAR", "abp_m_secret")
+	src := `version: 1
+server:
+  url: "http://127.0.0.1:8080"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "home-server"
+  status_probes:
+    - key: gpu
+      intent: "NVIDIA GPU 利用率 0-100"
+    - key: disk
+      command: ["/usr/local/bin/disk.sh"]
+      path: /data
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Machine.StatusProbes) != 2 {
+		t.Fatalf("probes=%d", len(c.Machine.StatusProbes))
+	}
+	if c.Machine.StatusProbes[0].Interval.Duration != time.Minute {
+		t.Fatalf("gpu interval default %v", c.Machine.StatusProbes[0].Interval.Duration)
+	}
+	if c.Machine.StatusProbes[0].Timeout.Duration != 15*time.Second {
+		t.Fatalf("timeout default %v", c.Machine.StatusProbes[0].Timeout.Duration)
+	}
+
+	bad := strings.Replace(src, "intent: \"NVIDIA GPU 利用率 0-100\"", "", 1)
+	if err := os.WriteFile(p, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("probe without intent or command should fail")
+	}
+}
+
+func TestAtomicWriteRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	t.Setenv("TEST_TOKEN_VAR", "abp_m_secret")
+	src := `version: 1
+server:
+  url: "http://127.0.0.1:8080"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "home-server"
+  status_probes:
+    - key: gpu
+      intent: "util"
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Server.MachineToken = "abp_m_written_token"
+	if err := AtomicWrite(p, c); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_TOKEN_VAR", "")
+	got, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Token() != "abp_m_written_token" {
+		t.Fatalf("token=%q", got.Token())
+	}
+	if len(got.Machine.StatusProbes) != 1 || got.Machine.StatusProbes[0].Key != "gpu" {
+		t.Fatalf("probes=%v", got.Machine.StatusProbes)
+	}
+}

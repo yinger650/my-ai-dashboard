@@ -2,7 +2,8 @@ version: 1
 
 server:
   url: "http://127.0.0.1:8080"
-  # The machine token is read from this environment variable, never from the file.
+  # Placeholder; a real token may live here. Non-empty ABP_MACHINE_TOKEN wins.
+  machine_token: "abp_m_REPLACE_ME"
   machine_token_env: "ABP_MACHINE_TOKEN"
   timeout: 20s
   tls_insecure_skip_verify: false
@@ -10,6 +11,13 @@ server:
 machine:
   key: "home-server"
   display_name: "家庭服务器"
+  status_probes:
+    - key: gpu
+      intent: "NVIDIA GPU 利用率 0-100"
+    - key: data_dir
+      intent: "/data 占用百分比"
+      path: /data
+      interval: 60s
 
 storage:
   spool_path: "/var/lib/agentboard-client/spool.db"

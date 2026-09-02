@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"agentboard/internal/client/agent"
@@ -27,7 +29,9 @@ import (
 	"agentboard/internal/client/projreport"
 	"agentboard/internal/client/sender"
 	"agentboard/internal/client/spool"
+	"agentboard/internal/client/statusprobe"
 	"agentboard/internal/client/update"
+	"agentboard/internal/client/wrapd"
 	"agentboard/internal/event"
 	"agentboard/internal/shared"
 	"agentboard/internal/summarize"
@@ -62,29 +66,55 @@ type Runner struct {
 	lastDisc  time.Time
 	probePin  map[string]string
 
+	cfgPath       string
+	wrap          *wrapd.Manager
+	statusReady   map[string]*liveStatus
+	hbMeta        map[string]any
+	probeMetaKeys map[string][]string
+	lastWrapSum   map[string]time.Time
+
 	Build update.Info
+}
+
+type liveStatus struct {
+	statusprobe.Ready
+	fails int
 }
 
 // New constructs a Runner.
 func New(cfg *config.Config, sp *spool.Spool, log *slog.Logger) *Runner {
 	dir := filepath.Dir(cfg.Storage.SpoolPath)
-	return &Runner{
-		cfg:       cfg,
-		sp:        sp,
-		col:       collector.New(),
-		snd:       sender.New(cfg.Server.URL, cfg.Token(), cfg.Server.Timeout.Duration),
-		log:       log,
-		bootID:    shared.NewID(),
-		seenPath:  filepath.Join(dir, "cursor-seen.json"),
-		statePath: filepath.Join(dir, "inspect-state.json"),
-		httpPrev:  map[string]bool{},
-		proj:      agent.NewState(),
-		cronTail:  &collector.CronTail{Seen: map[string]bool{}},
-		logBuf:    aiinspect.NewBuffer(sp),
-		lastProbe: map[string]time.Time{},
-		lastSum:   map[string]time.Time{},
-		probePin:  map[string]string{},
+	r := &Runner{
+		cfg:           cfg,
+		sp:            sp,
+		col:           collector.New(),
+		snd:           sender.New(cfg.Server.URL, cfg.Token(), cfg.Server.Timeout.Duration),
+		log:           log,
+		bootID:        shared.NewID(),
+		seenPath:      filepath.Join(dir, "cursor-seen.json"),
+		statePath:     filepath.Join(dir, "inspect-state.json"),
+		httpPrev:      map[string]bool{},
+		proj:          agent.NewState(),
+		cronTail:      &collector.CronTail{Seen: map[string]bool{}},
+		logBuf:        aiinspect.NewBuffer(sp),
+		lastProbe:     map[string]time.Time{},
+		lastSum:       map[string]time.Time{},
+		probePin:      map[string]string{},
+		statusReady:   map[string]*liveStatus{},
+		hbMeta:        map[string]any{},
+		probeMetaKeys: map[string][]string{},
+		lastWrapSum:   map[string]time.Time{},
 	}
+	r.wrap = wrapd.New()
+	r.wrap.Enqueue = r.enqueue
+	r.wrap.Debug = func(msg string) {
+		if r.log != nil {
+			r.log.Debug(msg)
+		}
+	}
+	r.wrap.Audit = r.noteTaskDone
+	r.wrap.Summarize = r.summarizeWrap
+	return r
 }
 
 func (r *Runner) enqueue(eventType, serviceKey, runKey string, payload any) {
@@ -110,6 +140,11 @@ func (r *Runner) enqueue(eventType, serviceKey, runKey string, payload any) {
 func (r *Runner) ingestProjectCopy(env event.Envelope) {
 	for _, p := range projreport.Project(env) {
 		r.enqueue(p.Type, p.ServiceKey, p.RunKey, p.Payload)
+		if env.EventType == event.TypeRunTransition {
+			var rt event.RunTransition
+			_ = json.Unmarshal(env.Payload, &rt)
+			r.noteTaskDone(p.RunKey, p.ServiceKey, rt.Status, rt.Summary)
+		}
 	}
 }
 
@@ -119,6 +154,7 @@ func (r *Runner) CollectOnce() {
 	r.emitCursorAgent()
 	r.emitHTTP()
 	r.emitProbes()
+	r.emitStatusProbes()
 	r.emitAISummaries()
 	r.emitAIDiscover()
 }
@@ -139,6 +175,7 @@ func (r *Runner) collectAndProject() {
 		UptimeSeconds:    snap.UptimeSeconds,
 		SpoolQueued:      n,
 		Promote:          r.cfg.Collectors.Ports.Promote,
+		HeartbeatMeta:    r.heartbeatMetadata(),
 	}
 	evs, next := agent.Project(snap, r.proj, meta)
 	if r.cronTail != nil {
@@ -146,11 +183,16 @@ func (r *Runner) collectAndProject() {
 		next.CronOffsets = r.cronTail.Offsets
 		next.CronPrimed = r.cronTail.Primed
 	}
+	r.mu.Lock()
+	if r.proj != nil {
+		next.AuditRunKeys = mergeAuditKeys(next.AuditRunKeys, r.proj.AuditRunKeys)
+	}
 	r.proj = next
+	r.saveInspectState()
+	r.mu.Unlock()
 	for _, e := range evs {
 		r.enqueue(e.Type, e.ServiceKey, e.RunKey, e.Payload)
 	}
-	r.saveInspectState()
 }
 
 func (r *Runner) emitHeartbeatAlive() {
@@ -166,6 +208,7 @@ func (r *Runner) emitHeartbeatAlive() {
 		CollectorVersion:         "1.3.1",
 		HeartbeatIntervalSeconds: int(r.cfg.Intervals.Heartbeat.Duration.Seconds()),
 		UptimeSeconds:            r.col.Uptime(),
+		Metadata:                 r.heartbeatMetadata(),
 	})
 	ttl := agent.InspectTTL
 	r.enqueue(event.TypeServiceState, agent.InspectKey, "", event.ServiceState{
@@ -231,6 +274,15 @@ func (r *Runner) Run(ctx context.Context) {
 	r.emitSelfLog("board-client 启动，开始采集系统快照。", "info")
 
 	var wg sync.WaitGroup
+	go r.compileStatusProbes(ctx)
+	if err := r.startControl(ctx, &wg); err != nil {
+		r.log.Warn("control socket disabled", "err", err)
+	}
+
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
 	if r.cfg.LocalIngestOn() {
 		srv, err := localingest.New(r.log, r.cfg.LocalIngest.Listen)
 		if err != nil {
@@ -281,17 +333,29 @@ func (r *Runner) Run(ctx context.Context) {
 	curT := time.NewTicker(r.cfg.Intervals.CursorAgent.Duration)
 	httpT := time.NewTicker(r.cfg.Intervals.HTTP.Duration)
 	sideT := time.NewTicker(r.sideInterval())
+	wrapT := time.NewTicker(time.Second)
 	defer collectT.Stop()
 	defer hbT.Stop()
 	defer curT.Stop()
 	defer httpT.Stop()
 	defer sideT.Stop()
+	defer wrapT.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			wg.Wait()
 			return
+		case <-hup:
+			if err := r.Reload(); err != nil {
+				r.log.Warn("reload failed", "err", err)
+			} else {
+				r.log.Info("config reloaded")
+			}
+		case <-wrapT.C:
+			if r.wrap != nil {
+				r.wrap.TickTTL()
+			}
 		case <-hbT.C:
 			r.emitHeartbeatAlive()
 		case <-collectT.C:
@@ -302,6 +366,7 @@ func (r *Runner) Run(ctx context.Context) {
 			r.emitHTTP()
 		case <-sideT.C:
 			r.emitProbes()
+			r.emitStatusProbes()
 			r.emitAISummaries()
 			r.emitAIDiscover()
 		}
@@ -645,6 +710,13 @@ func (r *Runner) sideInterval() time.Duration {
 			}
 		}
 	}
+	r.mu.Lock()
+	for _, p := range r.statusReady {
+		if p.Interval > 0 && p.Interval < d {
+			d = p.Interval
+		}
+	}
+	r.mu.Unlock()
 	if d < time.Second {
 		d = time.Second
 	}

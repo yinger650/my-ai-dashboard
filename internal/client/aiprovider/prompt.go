@@ -36,6 +36,11 @@ func BuildPrompt(req Request) string {
 		b.WriteString("。\n")
 	case "report":
 		b.WriteString("任务：根据第一轮清单和第二轮追查输出，写一份中文运维巡检报告。先结论，再列异常服务与建议。\n")
+	case "probe_script":
+		b.WriteString("任务：根据意图写一段 POSIX sh 脚本。只输出脚本本身，不要解释，不要 Markdown。\n")
+		b.WriteString("脚本 stdout 必须是窄 JSON：")
+		b.WriteString(`{"state":"running","summary":"...","severity":"normal","statuses":[{"key":"...","label":"...","value":"数字","unit":"%"}]}`)
+		b.WriteString("。value 以数字为主。禁止 curl/wget、禁止读 token 环境变量、禁止调用 ingest、禁止 shell 拼接不可信输入。\n")
 	default:
 		b.WriteString("任务：总结下面的日志，指出最可能的故障或进展，给出一条处置建议。\n")
 	}

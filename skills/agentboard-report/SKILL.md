@@ -11,6 +11,8 @@ metadata: {"openclaw": {"requires": {"bins": ["python3"], "env": ["AGENTBOARD_TO
 
 本机 `board-client` 用**自己的** `ABP_MACHINE_TOKEN` 上报物理机（`board-client`、systemd、probe，以及本机打开的仓库 `proj-*`）。两条链路独立：发现本机 ingest 只表示 client 在跑，不会改 agent 的身份。
 
+**互斥：** 编码 Agent 会话用本 skill（`report.py`）。本机 shell / 训练作业用 `board-client wrap`（见 `skills/bc-wrapper/SKILL.md`），**不要**再对本机命令包一层 `report.py start`。本机 tee 打开时，会话终态会在物理机 `board-client` 上多一条「完成 task」滚动日志，Run 仍在 `proj-*`。Cloud Agent 不在这台机上时仍只走本 skill 直连看板。
+
 `AGENTBOARD_TOKEN` 未设置时**静默跳过**，不要中断用户任务。本机有 client **不能**代替 token。
 
 ## 何时必须上报
@@ -72,6 +74,7 @@ Token 只出现在环境或本机 secret 文件，**永远不要**写进仓库�
 - 本 skill：Token 绑定的 **virtual machine** 下有一个 `cursor` / `codex` / `openclaw` 服务
 - Cursor Cloud Agent：同一 virtual machine 下是 `cloud-{hostname}` 服务
 - 本机 `board-client`：物理机卡片上有采集服务，以及本机打开的仓库（`proj-*`，由 client 投影，不是 skill 改身份）
+- 本机作业：用 `board-client wrap`，Run 挂在 `board-client`；不要和 `report.py start` 叠用
 - 服务卡片：进行中任务数 + 每个 Run 的摘要；`stale` = TTL 过期
 - Runs：每次 `start` 一条，从 `running` 到 `succeeded`/`failed`
 - 日志：`start`/`progress`/`succeed`/`fail` 的 markdown
