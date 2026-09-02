@@ -1120,7 +1120,7 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 
 与 client 相关的提交由 GitHub Actions 交叉编译 `board-client-linux-amd64` 与 `board-client-linux-arm64`，覆盖滚动 Release 标签 `board-client`（`/releases/latest`）。产物含 `manifest.json` 与 `SHA256SUMS`。
 
-客户端配置 `update.enabled: true` 后，启动约 15 秒及之后每隔 `update.interval`（默认 1h）拉取 `manifest.json`。若远程 `commit` 与本机 ldflags 不同，则下载对应 `GOARCH` 二进制、校验 SHA-256、替换当前可执行文件并 `exec`。开发用 `go run` 应保持 `enabled: false`。当前只支持 linux `amd64` / `arm64`。
+客户端配置 `update.enabled: true` 后，启动约 15 秒及之后每隔 `update.interval`（默认 1h）对照 `manifest.json` 的 commit。GitHub 发布地址会改写为 `api.github.com` 取 Release 元数据，再用 `Accept: application/octet-stream` 下载资源（302 到 `release-assets.githubusercontent.com`），避免直连缓慢的 `github.com`。校验 SHA-256 后替换当前可执行文件并 `exec`。开发用 `go run` 应保持 `enabled: false`。当前只支持 linux `amd64` / `arm64`。
 
 ## 15. Cursor 与 Agent 集成
 

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -119,5 +120,91 @@ func TestRejectsBadHash(t *testing.T) {
 	}
 	if err := u.Apply(context.Background(), bin); err == nil {
 		t.Fatal("expected sha mismatch")
+	}
+}
+
+func TestGitHubReleaseAPI(t *testing.T) {
+	api := "https://api.github.com"
+	got, ok := githubReleaseAPI("https://github.com/yinger650/my-ai-dashboard/releases/latest/download", api)
+	if !ok || got != "https://api.github.com/repos/yinger650/my-ai-dashboard/releases/latest" {
+		t.Fatalf("latest download -> %q ok=%v", got, ok)
+	}
+	got, ok = githubReleaseAPI("https://github.com/yinger650/my-ai-dashboard/releases/download/board-client", api)
+	if !ok || got != "https://api.github.com/repos/yinger650/my-ai-dashboard/releases/tags/board-client" {
+		t.Fatalf("tag download -> %q ok=%v", got, ok)
+	}
+	if _, ok := githubReleaseAPI("http://127.0.0.1:9/manifest.json", api); ok {
+		t.Fatal("direct URL should not look like GitHub")
+	}
+}
+
+func TestGitHubAPIThenCDN(t *testing.T) {
+	payload := []byte("cdn-linux-client")
+	sum := sha256.Sum256(payload)
+	digest := hex.EncodeToString(sum[:])
+	manifest := `{"commit":"cccccccccccccccccccccccccccccccccccccccc","binaries":{"linux-amd64":{"name":"board-client-linux-amd64","sha256":"` + digest + `","size":` + strconv.Itoa(len(payload)) + `}}}`
+
+	mux := http.NewServeMux()
+	var base string
+	mux.HandleFunc("/repos/yinger650/my-ai-dashboard/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") == "application/octet-stream" {
+			t.Error("release json must not request octet-stream")
+		}
+		_, _ = w.Write([]byte(`{"tag_name":"board-client","assets":[
+			{"name":"manifest.json","url":"` + base + `/assets/manifest","size":100},
+			{"name":"board-client-linux-amd64","url":"` + base + `/assets/bin","size":16}
+		]}`))
+	})
+	mux.HandleFunc("/assets/manifest", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != "application/octet-stream" {
+			http.Error(w, "want octet-stream", http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, r, "/cdn/manifest.json", http.StatusFound)
+	})
+	mux.HandleFunc("/assets/bin", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != "application/octet-stream" {
+			http.Error(w, "want octet-stream", http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, r, "/cdn/board-client-linux-amd64", http.StatusFound)
+	})
+	mux.HandleFunc("/cdn/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(manifest))
+	})
+	mux.HandleFunc("/cdn/board-client-linux-amd64", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base = srv.URL
+
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "board-client")
+	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	u := New("https://github.com/yinger650/my-ai-dashboard/releases/latest/download", Info{Commit: "dddd"}, 0)
+	u.APIBase = srv.URL
+	u.GOOS, u.GOARCH = "linux", "amd64"
+	u.ExecPath = func() (string, error) { return exe, nil }
+	u.Exec = func(string, []string, []string) error { return nil }
+
+	_, bin, ok, err := u.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected update via GitHub API")
+	}
+	if !strings.Contains(bin.DownloadURL, "/assets/bin") {
+		t.Fatalf("expected API asset URL, got %s", bin.DownloadURL)
+	}
+	if err := u.Apply(context.Background(), bin); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(exe)
+	if string(got) != string(payload) {
+		t.Fatalf("got %q", got)
 	}
 }

@@ -98,7 +98,7 @@ GitHub Actions（`.github/workflows/board-client.yml`）在 client 相关提交�
 
 并发布到滚动 Release：<https://github.com/yinger650/my-ai-dashboard/releases/latest>。
 
-生产 `deploy/client.yaml` 已打开自动升级。客户端会按 `update.interval`（默认 1 小时）对照 `manifest.json` 的 commit，下载、校验 SHA-256 后替换自身。本地 `go run` 请保持 `update.enabled: false`。
+生产 `deploy/client.yaml` 已打开自动升级。客户端会按 `update.interval`（默认 1 小时）对照 `manifest.json` 的 commit：先请求 `api.github.com`，再从 GitHub Release CDN 下载，校验 SHA-256 后替换自身。本地 `go run` 请保持 `update.enabled: false`。
 
 手动编译：
 
