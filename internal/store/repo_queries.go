@@ -102,12 +102,16 @@ func (s *Store) ServiceSeverityCounts(ctx context.Context, machineID string) (ma
 	return out, nil
 }
 
-// RecentMachineLogs returns recent warning/error log.append entries for a machine.
-func (s *Store) RecentMachineLogs(ctx context.Context, machineID string, limit int) ([]LogEntry, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
+const logEntrySelect = `
+		SELECT e.event_id, e.severity, e.occurred_at, e.payload_json,
+			IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,''), IFNULL(r.run_key,'')
 		FROM events e
 		LEFT JOIN services sv ON sv.id = e.service_id
+		LEFT JOIN runs r ON r.id = e.run_id`
+
+// RecentMachineLogs returns recent warning/error log.append entries for a machine.
+func (s *Store) RecentMachineLogs(ctx context.Context, machineID string, limit int) ([]LogEntry, error) {
+	rows, err := s.db.QueryContext(ctx, logEntrySelect+`
 		WHERE e.machine_id = ? AND e.event_type = 'log.append' AND e.severity IN ('warning','error')
 		ORDER BY e.occurred_at DESC LIMIT ?`, machineID, limit)
 	if err != nil {
@@ -142,10 +146,7 @@ func (s *Store) ListMachineLogsExcluding(ctx context.Context, machineID, beforeI
 		args = append(args, key, key)
 	}
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
-		FROM events e
-		LEFT JOIN services sv ON sv.id = e.service_id
+	rows, err := s.db.QueryContext(ctx, logEntrySelect+`
 		WHERE `+where+`
 		ORDER BY e.occurred_at DESC LIMIT ?`, args...)
 	if err != nil {
@@ -158,23 +159,20 @@ func (s *Store) ListMachineLogsExcluding(ctx context.Context, machineID, beforeI
 // ListServiceLogs returns log.append entries for a service, newest first,
 // optionally before a cursor (occurred_at).
 func (s *Store) ListServiceLogs(ctx context.Context, serviceID, beforeISO string, limit int) ([]LogEntry, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 200 {
+		limit = 200
 	}
 	var rows *sql.Rows
 	var err error
 	if beforeISO == "" {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
-			FROM events e
-			LEFT JOIN services sv ON sv.id = e.service_id
+		rows, err = s.db.QueryContext(ctx, logEntrySelect+`
 			WHERE e.service_id = ? AND e.event_type = 'log.append'
 			ORDER BY e.occurred_at DESC LIMIT ?`, serviceID, limit)
 	} else {
-		rows, err = s.db.QueryContext(ctx, `
-			SELECT e.event_id, e.severity, e.occurred_at, e.payload_json, IFNULL(e.service_id,''), IFNULL(sv.service_key,''), IFNULL(sv.name,'')
-			FROM events e
-			LEFT JOIN services sv ON sv.id = e.service_id
+		rows, err = s.db.QueryContext(ctx, logEntrySelect+`
 			WHERE e.service_id = ? AND e.event_type = 'log.append' AND e.occurred_at < ?
 			ORDER BY e.occurred_at DESC LIMIT ?`, serviceID, beforeISO, limit)
 	}
@@ -188,15 +186,15 @@ func (s *Store) ListServiceLogs(ctx context.Context, serviceID, beforeISO string
 func scanLogRows(rows *sql.Rows) ([]LogEntry, error) {
 	var out []LogEntry
 	for rows.Next() {
-		var eid, sev, occ, payload, sid, skey, sname string
-		if err := rows.Scan(&eid, &sev, &occ, &payload, &sid, &skey, &sname); err != nil {
+		var eid, sev, occ, payload, sid, skey, sname, rkey string
+		if err := rows.Scan(&eid, &sev, &occ, &payload, &sid, &skey, &sname, &rkey); err != nil {
 			return nil, err
 		}
 		var lp event.LogPayload
 		_ = json.Unmarshal([]byte(payload), &lp)
 		out = append(out, LogEntry{
 			EventID: eid, Markdown: lp.Markdown, Severity: sev, Source: lp.Source,
-			OccurredAt: occ, ServiceID: sid, ServiceKey: skey, ServiceName: sname,
+			OccurredAt: occ, ServiceID: sid, ServiceKey: skey, ServiceName: sname, RunKey: rkey,
 		})
 	}
 	return out, rows.Err()

@@ -358,6 +358,10 @@ func TestActiveRunSummaryAndLogRunID(t *testing.T) {
 	if !runID.Valid || runID.String == "" {
 		t.Fatal("log.append not bound to run_id")
 	}
+	logs, err := st.ListServiceLogs(ctx, svc.ID, "", 50)
+	if err != nil || len(logs) != 1 || logs[0].RunKey != "conv-1" || logs[0].Markdown != "开始" {
+		t.Fatalf("log run_key: %v %+v", err, logs)
+	}
 
 	if r, err := st.IngestEvent(ctx, mkEnv(t, event.TypeRunTransition, "cursor", "conv-1", event.RunTransition{
 		ServiceName: "Cursor", ServiceType: "agent", Status: "succeeded", Summary: "已完成 M7",
