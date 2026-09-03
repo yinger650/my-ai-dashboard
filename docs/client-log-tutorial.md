@@ -99,6 +99,7 @@ sudo board-client config tui --config /etc/agentboard/client.yaml
 常用操作：
 
 - 输入编号：改身份，或勾选/取消一项功能
+- `t ai.discover`：按功能 id 勾选（例如打开 AI 主机巡检）
 - `s`：保存
 - `q`：退出
 
@@ -165,6 +166,28 @@ ssh -L 7439:127.0.0.1:7439 你的用户@这台机器
 - `url`：`https://board.yinger650.com/health/live`
 
 探测失败时，看板上这条服务会变红，并写一条日志。
+
+### 想用一句话添加特殊采集
+
+在 TUI/WEB 的 **自然语言扩展** 中添加，不需要自己写脚本。先勾选 **AI 总开关**，并在 `/etc/agentboard/board-client.env` 加入：
+
+```bash
+CURSOR_API_KEY=你的CursorAgentKey
+```
+
+然后 `sudo systemctl restart board-client`。Key 只给这台机器上的 `cursor-agent`，不要写入 YAML、git 或看板。
+
+每条扩展先选类型：
+
+| 类型 | 适合什么 | 例子 |
+|---|---|---|
+| `metric` | 显示在机器卡片上的数字 | 「统计 `/data` 占用百分比和文件数量」 |
+| `service` | 单独显示成一条服务 | 「通过 `docker exec` 检查 `web` 容器里的 nginx」 |
+| `http` | HTTP(S) 健康检查 | 「检查 `http://127.0.0.1:18080/health`，期望 200」 |
+
+填写 `key`（例如 `data-stats`）、类型、显示名和中文描述；涉及目录时再填绝对 `path`。保存后 client 会在本机让 Cursor Agent 生成并试跑一次，成功后缓存产物。以后每轮采集不调用 AI；Cursor 暂时不可用时仍运行最后一个有效版本。
+
+安全限制：自动脚本不能用 `curl/wget`、不能读取上报 Token、不能调用 ingest。`http` 类型会生成受限的结构化配置并交给内置 HTTP 探测器，不生成 curl 脚本。
 
 ### 想看「一次本机任务」的日志（训练、脚本）
 

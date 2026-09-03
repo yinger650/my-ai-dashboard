@@ -1,12 +1,12 @@
 # AgentBoard Personal 个人服务器与 AI Agent 看板设计规格
 
-> 文档版本：1.3
+> 文档版本：1.4
 >
 > 状态：现行规范（对照仓库实现修订）
 >
 > 更新日期：2026-09-03
 >
-> 基线：1.0（2026-08-18，见 [archive/agentboard-personal-design-spec-v1.0.md](archive/agentboard-personal-design-spec-v1.0.md)）；1.1 为 2026-08-26 对照实现修订；1.2 为 2026-08-31 AI 总结 / 巡检 / probe
+> 基线：1.0（2026-08-18，见 [archive/agentboard-personal-design-spec-v1.0.md](archive/agentboard-personal-design-spec-v1.0.md)）；1.1 为 2026-08-26 对照实现修订；1.2 为 2026-08-31 AI 总结 / 巡检 / probe；1.3 为升级后配置勾选；1.4 为自然语言扩展采集
 >
 > 对应仓库版本：`board-server` / `board-client` **0.1.10**（`Makefile` `VERSION`）；客户端心跳上报 `collector_version` 为 **1.3.1**
 >
@@ -30,6 +30,7 @@
 4. **1.0 没有、代码已经上线的能力**标为「1.1 新增」，并写入正文。
 5. **1.2 新增**为 board-client 本地 AI 总结、两轮巡检与 YAML 白名单 probe。
 6. **1.3 新增**为升级后本机配置勾选：身份继承、默认功能目录、YAML overlay、TUI/WEB 同一套勾选（§14.13）。
+7. **1.4 新增**为自然语言扩展采集：同一入口配置机器指标、虚拟 Service 与 HTTP 健康检查（§14.14）。
 
 ### 0.2 1.1 已实现、1.0 未写的能力
 
@@ -51,6 +52,7 @@
 | **（1.2）** 用户 probe 脚本 | 本机 YAML 声明 argv；stdout 窄 schema 映射为已有 Event。board-server **永不**下发命令 |
 | **（1.2）** 客户端升级镜像 | 生产 client 从 `GET /client-updates` 拉包；GitHub Release CDN 仅作后备。见 §14.11 |
 | **（1.3）** 升级后本机配置勾选 | `config tui` / `config web` 展示内置功能目录；key / 上报 URL / token 继承；自定义列表 overlay 保留；新功能默认不自动开启。见 §14.13 |
+| **（1.4）** 自然语言扩展采集 | `machine.status_probes` 以 `kind=metric/service/http` 编译本地产物；缓存后不依赖每轮 AI；看板不下发命令。见 §14.14 |
 
 ### 0.3 相对 1.0 的现行行为偏差
 
@@ -1172,6 +1174,28 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 7. **首次无文件**：URL 默认 `https://board.yinger650.com`；主机指标类默认勾选；可选能力（AI 巡检、HTTP 探测等）不勾。
 8. WEB 仍仅 loopback。看板 WEB **禁止**下发或编辑 client YAML。
 
+### 14.14 自然语言扩展采集（1.4 新增）
+
+`machine.status_probes` 是统一的本机自然语言扩展入口。旧条目没有 `kind` 时等价于 `metric`，无需迁移：
+
+| kind | 用途 | 编译产物 | 看板投影 |
+|---|---|---|---|
+| `metric` | GPU、目录占用、文件数量等机器指标 | POSIX sh，stdout 为窄 `probe.Result` JSON | 数字进入下一次 heartbeat metadata；非数字状态挂在 `board-client` |
+| `service` | Docker 容器内 nginx、特殊只读命令 | POSIX sh，stdout 为完整 `probe.Result` JSON | `probe.MapJSON` 投影为独立 virtual Service |
+| `http` | 本机或远端 HTTP(S) 健康检查 | `{url,method,expect_status,expect_contains}` JSON | 复用 HTTP collector 的 state/status/转换日志 |
+
+编译只在 client 启动/reload 后进行。缓存 hash 包含 `kind + intent + path`；hash 命中时不调用 AI。新产物必须先通过静态检查、schema 校验和试运行，再原子替换。生成失败、AI 不可用或新产物试跑失败时继续使用最后一个有效缓存；没有缓存则发 `status_probe_skipped` / `status_probe_failed` notice 后跳过，不阻塞主 HostSnapshot。
+
+安全边界：
+
+1. Cursor Key 只通过 `ai.api_key_env`（默认 `CURSOR_API_KEY`）进入本机 provider，禁止写入产物、Event 或看板。
+2. 生成脚本使用收紧环境、超时和 stdout 上限；脚本及元数据不得 group/other writable。禁止 `curl`、`wget`、`abp_m_`、token 环境变量与 `/ingest/`。
+3. HTTP 不生成 shell 网络命令；URL 必须是无用户名密码的绝对 `http`/`https` 地址，method 仅 `GET`/`HEAD`，期望状态码限 100–599。
+4. `service` / `http` 只能投影到本条配置的 `key`，模型输出不能选择 `service_key`。配置删除后 metric 用 `null` 清 stale；service/http 依 TTL 变 stale。
+5. 看板 server 与 WEB 均不得创建、修改或下发该配置及命令。
+
+TUI/WEB 将该列表显示为「自然语言扩展」，字段为 key、kind、name、intent、可选 path、interval、TTL；原 `collectors.http.targets` 与 `collectors.probes.scripts` 继续作为手写高级入口保留。
+
 ## 15. Cursor 与 Agent 集成
 
 ### 15.1 Cloud Agents API（1.0 目标，尚未实现）
@@ -1539,6 +1563,8 @@ Artifact 上传前检查配额。数据库无法写入时 `/health/ready` 必须
 
 **（1.3）** 配置目录 / overlay 必须覆盖：现有 yaml 的开关解读；新 id 判定；seed 只在子树为空时写入；保留注释与自定义列表；不把 `applyDefaults` 的 systemd include 写进原本没有该段的文件；token 空提交不覆盖；未审功能发日志、保存后不再重复。
 
+**（1.4）** 自然语言扩展必须覆盖：旧配置默认 metric；kind 与字段校验；不同 kind 改变 hash 并重编译；缓存命中不调用 AI；坏脚本/JSON/HTTP 配置回退旧产物；HTTP URL/方法/状态码限制；metric stale 清理；service 仅投影自己的 key；HTTP 成功、失败、恢复；TUI/WEB overlay 保留未知 YAML。真模型与真实外部 HTTP 测试仍须环境变量 gate。
+
 ### 21.2 前端
 
 必须覆盖：各 health 卡片、离线「最后数据」、**显示/隐藏离线**（默认显示、开关、空状态、`abp.show-offline`）、Markdown 不执行 HTML、Token 明文只在创建 Dialog、Access 异常标红、过期数据横幅。
@@ -1574,6 +1600,8 @@ XSS、`javascript:` 链接、外部图片、路径穿越文件名、MIME 伪装�
 
 **M10（1.3）**：升级后本机配置勾选（§14.13）：功能目录、YAML overlay、TUI/WEB、`seen_features` 提醒。
 
+**M11（1.4）**：自然语言扩展采集（§14.14）：metric/service/http 分类编译、本机缓存、安全回退、三类 Event 投影与统一配置 UI。
+
 后续实现必须按缺口补齐，禁止先搭大量空壳。发现本文与代码矛盾时，先列矛盾再改，不得静默选边。
 
 ## 24. 最终验收清单
@@ -1586,6 +1614,7 @@ XSS、`javascript:` 链接、外部图片、路径穿越文件名、MIME 伪装�
 - [x] Linux 客户端采集 CPU/内存/磁盘/网络/端口，可选 systemd / HTTP / transcript。
 - [x] **（1.2）** 本机 AI 总结 / 巡检 / probe 走已有 Event 类型；Key 不进 YAML；CI 不打真实 API。
 - [x] **（1.3）** 本机 `config tui` / `config web` 勾选默认功能；身份继承；自定义 overlay 保留；升级只提醒不改 YAML。
+- [x] **（1.4）** 自然语言扩展支持机器指标、虚拟 Service 与 HTTP 探测；本机缓存后不依赖每轮 AI；看板不下发命令。
 - [x] Event `event_id` 去重；断网 spool 可补传。
 - [x] Machine online/stale/offline/degraded 按 §13.3 计算。
 - [x] Service TTL 超时显示 stale / 「TTL 过期」。
