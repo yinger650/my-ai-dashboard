@@ -476,6 +476,8 @@ Machine Token 自动创建 Service：
 
 `state` 是来源状态文本，最长 32 字符；`severity` 只能是 `normal/info/warning/error/unknown`。如果服务不存在且 Machine 允许自动创建，则按 `service_key` 创建；否则返回 404。
 
+`metadata.path` 为服务主进程路径（优先 `/proc/<pid>/exe`，否则 systemd `ExecStart` 的二进制）。HTTP 探测类 virtual service 把探测 URL 同时写入 `metadata.path` 与 `metadata.url`。服务端把这两个字段 merge 进 `services.metadata_json`，看板 API 以 `path` 返回。空值不覆盖已有路径。
+
 ### 11.6 `status.upsert`
 
 一条事件最多 50 个 item。`key` 匹配 `[a-zA-Z0-9_.-]{1,64}`。Agent 心跳**不**再写入 `alive` / `provider` / `last_heartbeat`（存活看 `service.state` 的 TTL）。HTTP 探测常用 `http_status`、`latency_ms`、`ssl_days`。展示过滤见 §16.3.4。
@@ -1049,7 +1051,7 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 | 期望状态码且无传输错误 | `running` / normal |
 | 非期望状态码、超时、连接失败 | `failed` / error |
 
-同时 `status.upsert`：`http_status`、`latency_ms`、可选 `ssl_days`。状态变化时 `log.append`。`ttl_seconds` 默认 180，避免探测进程挂掉后服务永远显示 running。
+同时 `status.upsert`：`http_status`、`latency_ms`、可选 `ssl_days`。状态变化时 `log.append`。`ttl_seconds` 默认 180，避免探测进程挂掉后服务永远显示 running。`service.state.metadata.path` / `url` 为探测 URL（例如 `https://yinger650.com/`），不是站点主机上的 nginx 路径。
 
 远程只跑客户端的部署见 `deploy/client-aliyun.yaml` 与 `deploy/board-client-remote.service`。User-Agent：`AgentBoard-Client/1.2 (+https://board.yinger650.com)`。
 

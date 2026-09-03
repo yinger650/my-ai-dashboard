@@ -22,6 +22,7 @@ import { StatusLines } from "../components/StatusLines";
 import { ActiveRunsList } from "../components/ActiveRunsList";
 import { visibleHostServices } from "../lib/host-services";
 import { markServiceLogsSeen } from "../lib/log-seen";
+import { ServicePathLine } from "../components/ServicePath";
 
 interface MachineDetail {
   machine: Machine;
@@ -170,6 +171,7 @@ export function MachineDetailPage() {
                   <span className="ml-auto text-xs text-slate-500">{localTime(s.last_seen_at)}</span>
                 </div>
                 <p className="mt-0.5 text-xs leading-relaxed text-slate-400">{describeServiceFunction(s)}</p>
+                <ServicePathLine path={s.path} />
                 <p className={`text-xs sev-${s.severity}`}>{describeServiceStatus(s)}</p>
               </div>
             </Link>

@@ -109,6 +109,7 @@ func rewritePayload(eventType string, raw json.RawMessage, name, workspace strin
 		st.Name = name
 		st.Type = "agent"
 		st.Metadata = wrap.Metadata
+		st.SetPath(workspace)
 		return st
 	case event.TypeRunTransition:
 		rt := event.RunTransition{}

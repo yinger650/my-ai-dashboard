@@ -45,6 +45,9 @@ func TestProjectRewritesOntoProjService(t *testing.T) {
 	if got.Metadata["host_project"] != true {
 		t.Fatalf("metadata=%v", got.Metadata)
 	}
+	if got.Metadata["path"] != "/repo/my-ai-dashboard" {
+		t.Fatalf("path=%v", got.Metadata["path"])
+	}
 	if out[1].Type != event.TypeStatusUpsert {
 		t.Fatalf("extra type %s", out[1].Type)
 	}

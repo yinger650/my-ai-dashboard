@@ -60,11 +60,12 @@ func (c *Collector) Collect(cfg *config.Config, opt CollectOptions) hostsnap.Sna
 			filtered := FilterUnits(units, col.Systemd.IncludeAll, col.Systemd.Include, col.Systemd.ExcludePrefixes)
 			for _, u := range filtered {
 				snap.Units = append(snap.Units, hostsnap.Unit{
-					Unit: u.Unit, Load: u.Load, Active: u.Active, Sub: u.Sub, Description: u.Description,
+					Unit: u.Unit, Load: u.Load, Active: u.Active, Sub: u.Sub, Description: u.Description, Path: u.Path,
 				})
 			}
 		}
 	}
+	annotateProcessPaths(&snap)
 	return snap
 }
 

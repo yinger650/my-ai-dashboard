@@ -62,7 +62,7 @@ export function describeServiceFunction(s: ServiceBriefInput): string {
   const key = bareKey(s.service_key);
   if (FUNCTION_BY_KEY[key]) return FUNCTION_BY_KEY[key];
   if (FUNCTION_BY_KEY[s.service_key]) return FUNCTION_BY_KEY[s.service_key];
-  if (s.service_key.startsWith("site-")) return "HTTP 健康探测目标。";
+  if (s.service_key.startsWith("site-")) return "从本机对公网 URL 做 HTTP 健康探测，不是站点自己的进程。";
   if (s.service_key.endsWith(".service")) return `systemd 单元「${s.name}」。`;
   const hint = TYPE_HINT[s.type];
   if (hint) return `${hint}「${s.name}」。`;
@@ -81,4 +81,8 @@ export function describeServiceStatus(s: ServiceBriefInput): string {
 
 export function describeService(s: ServiceBriefInput): string {
   return `${describeServiceFunction(s)} ${describeServiceStatus(s)}`;
+}
+
+export function servicePathLabel(path: string): string {
+  return /^https?:\/\//i.test(path.trim()) ? "探测 URL" : "主进程";
 }

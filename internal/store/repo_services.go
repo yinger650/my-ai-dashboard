@@ -18,6 +18,7 @@ func scanService(sc interface{ Scan(...any) error }) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.FillPath()
 	return &s, nil
 }
 

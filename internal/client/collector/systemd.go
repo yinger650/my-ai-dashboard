@@ -8,11 +8,15 @@ import (
 
 // Unit is a systemd unit snapshot.
 type Unit struct {
-	Unit        string
-	Load        string
-	Active      string
-	Sub         string
-	Description string
+	Unit         string
+	Load         string
+	Active       string
+	Sub          string
+	Description  string
+	MainPID      int
+	ExecStart    string
+	FragmentPath string
+	Path         string
 }
 
 // ReadSystemdUnits runs systemctl show and returns matching units.
@@ -25,7 +29,7 @@ func ReadSystemdUnitsCmd(run Commander, includeAll bool, include []string) ([]Un
 	if run == nil {
 		run = DefaultCommander
 	}
-	args := []string{"show", "--no-pager", "--property=Id,LoadState,ActiveState,SubState,Description"}
+	args := []string{"show", "--no-pager", "--property=Id,LoadState,ActiveState,SubState,Description,MainPID,ExecStart,FragmentPath"}
 	if includeAll {
 		args = append(args, "*.service")
 	} else {
@@ -72,9 +76,18 @@ func ParseSystemctlShow(output string) []Unit {
 			cur.Sub = v
 		case "Description":
 			cur.Description = v
+		case "MainPID":
+			cur.MainPID = parseMainPID(v)
+		case "ExecStart":
+			cur.ExecStart = v
+		case "FragmentPath":
+			cur.FragmentPath = v
 		}
 	}
 	flush()
+	for i := range units {
+		units[i].Path = resolveUnitPath(units[i])
+	}
 	return units
 }
 
@@ -130,6 +143,7 @@ func UnitsToSnapshot(units []Unit) event.ServiceSnapshot {
 			Sub:         u.Sub,
 			Description: u.Description,
 			Name:        name,
+			Path:        u.Path,
 		})
 	}
 	return event.ServiceSnapshot{Units: out}

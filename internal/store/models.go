@@ -40,6 +40,7 @@ type Service struct {
 	Enabled      bool    `json:"enabled"`
 	SortOrder    int     `json:"sort_order"`
 	MetadataJSON string  `json:"metadata_json"`
+	Path         string  `json:"path,omitempty"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 }

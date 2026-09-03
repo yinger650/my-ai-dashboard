@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeService, describeServiceFunction, describeServiceStatus } from "./service-brief";
+import { describeService, describeServiceFunction, describeServiceStatus, servicePathLabel } from "./service-brief";
 
 describe("describeServiceFunction", () => {
   it("uses stored description when present", () => {
@@ -38,7 +38,7 @@ describe("describeServiceFunction", () => {
         state_summary: "",
         severity: "normal",
       }),
-    ).toMatch(/HTTP/);
+    ).toMatch(/不是站点自己的进程/);
   });
 });
 
@@ -70,5 +70,12 @@ describe("describeService", () => {
     });
     expect(text).toMatch(/主机巡检/);
     expect(text).toMatch(/alive/);
+  });
+});
+
+describe("servicePathLabel", () => {
+  it("labels http urls as probes and binaries as main process", () => {
+    expect(servicePathLabel("https://yinger650.com/")).toBe("探测 URL");
+    expect(servicePathLabel("/usr/sbin/nginx")).toBe("主进程");
   });
 });

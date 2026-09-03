@@ -22,6 +22,7 @@ type Port struct {
 	Port     int    `json:"port"`
 	PID      int    `json:"pid,omitempty"`
 	Process  string `json:"process,omitempty"`
+	Exe      string `json:"exe,omitempty"`
 }
 
 // Docker is a compact docker inventory. Nil means the collector was disabled.
@@ -29,6 +30,7 @@ type Docker struct {
 	Available  bool
 	ImageCount int
 	Containers []Container
+	Exe        string
 }
 
 // Container is one docker ps -a row.
@@ -44,6 +46,7 @@ type Container struct {
 type Cron struct {
 	Jobs       []CronJob
 	Executions []CronExec
+	Exe        string
 }
 
 // CronJob is one enabled crontab line.
@@ -68,6 +71,7 @@ type Nginx struct {
 	PID       int
 	Reloads   int
 	Proxies   []Proxy
+	Exe       string
 }
 
 // Proxy is one location that reverse-proxies.
@@ -86,4 +90,5 @@ type Unit struct {
 	Active      string
 	Sub         string
 	Description string
+	Path        string
 }
