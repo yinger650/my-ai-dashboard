@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLoadRetentionDefaults(t *testing.T) {
 	t.Setenv("ABP_DATA_DIR", t.TempDir())
@@ -17,5 +20,11 @@ func TestLoadRetentionDefaults(t *testing.T) {
 	}
 	if c.EventQuotaBytes != 5*1024*1024*1024 {
 		t.Fatalf("quota = %d", c.EventQuotaBytes)
+	}
+	if !c.ClientUpdateSync {
+		t.Fatal("client update sync should default on")
+	}
+	if !strings.HasSuffix(c.ClientUpdateDir, "client-updates") {
+		t.Fatalf("client update dir = %q", c.ClientUpdateDir)
 	}
 }

@@ -149,6 +149,11 @@ func runServer() error {
 	if err := os.MkdirAll(cfg.ArtifactDir, 0o750); err != nil {
 		return err
 	}
+	if cfg.ClientUpdateDir != "" {
+		if err := os.MkdirAll(cfg.ClientUpdateDir, 0o755); err != nil {
+			return err
+		}
+	}
 
 	secretKey, err := auth.LoadOrCreateSecretKey(cfg.DataDir, cfg.SecretKeyEnv)
 	if err != nil {
@@ -176,8 +181,8 @@ func runServer() error {
 		Addr:              cfg.ListenAddr,
 		Handler:           s.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
@@ -221,6 +226,8 @@ func runServer() error {
 			}
 		}
 	}()
+
+	go s.RunClientUpdateSync(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {

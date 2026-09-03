@@ -48,6 +48,7 @@
 | **（1.2）** 本地 AI 日志总结 | `board-client` 调本机 `cursor-agent` / `codex` CLI，把 local ingest / transcript / probe 文本总结为 `log.pin`；失败降级启发式 |
 | **（1.2）** AI 主机巡检 | 两轮：固定只读清单 → AI 返回追查 JSON → 客户端按 YAML 白名单执行 → `ai-inspect` 报告 |
 | **（1.2）** 用户 probe 脚本 | 本机 YAML 声明 argv；stdout 窄 schema 映射为已有 Event。board-server **永不**下发命令 |
+| **（1.2）** 客户端升级镜像 | 生产 client 从 `GET /client-updates` 拉包；GitHub Release CDN 仅作后备。见 §14.11 |
 
 ### 0.3 相对 1.0 的现行行为偏差
 
@@ -891,6 +892,7 @@ intervals:
 update:
   enabled: false
   url: "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
+  # 国内生产请改为看板镜像：http://127.0.0.1:8090/client-updates
   interval: 1h
 ai:
   enabled: false
@@ -1120,7 +1122,7 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 
 与 client 相关的提交由 GitHub Actions 交叉编译 `board-client-linux-amd64` 与 `board-client-linux-arm64`，覆盖滚动 Release 标签 `board-client`（`/releases/latest`）。产物含 `manifest.json` 与 `SHA256SUMS`。
 
-客户端配置 `update.enabled: true` 后，启动约 15 秒及之后每隔 `update.interval`（默认 1h）对照 `manifest.json` 的 commit。GitHub 发布地址会改写为 `api.github.com` 取 Release 元数据，再用 `Accept: application/octet-stream` 下载资源（302 到 `release-assets.githubusercontent.com`），避免直连缓慢的 `github.com`。校验 SHA-256 后替换当前可执行文件并 `exec`。开发用 `go run` 应保持 `enabled: false`。当前只支持 linux `amd64` / `arm64`。
+客户端配置 `update.enabled: true` 后，启动约 15 秒及之后每隔 `update.interval`（默认 1h）对照 `manifest.json` 的 commit。**优先**请求 `{server.url}/client-updates`（腾讯云本机即 `http://127.0.0.1:8090/client-updates`），失败再试配置里的 `update.url`。GitHub Release 现会 302 到 `release-assets.githubusercontent.com`（Azure），国内机器经常超时或被阻断，因此生产 YAML 必须指向看板镜像，而不是 GitHub。`board-server` 公开 `GET /client-updates/{name}`，`PUT` 需 `ABP_CLIENT_UPDATE_TOKEN`；main 上的 GitHub Actions 在配置了 `BOARD_CLIENT_UPDATE_TOKEN` 时把产物镜像上去。校验 SHA-256 后替换当前可执行文件并 `exec`。开发用 `go run` 应保持 `enabled: false`。当前只支持 linux `amd64` / `arm64`。
 
 ## 15. Cursor 与 Agent 集成
 
@@ -1448,8 +1450,9 @@ Artifact 上传前检查配额。数据库无法写入时 `/health/ready` 必须
 | 二进制 | `/opt/agentboard/bin/board-server` |
 | 环境文件 | `/etc/agentboard/board-server.env`（由 `deploy/board-server.env.example` 复制） |
 | 客户端 | 本机或远程 `board-client` + `/etc/agentboard/client.yaml` |
+| 客户端升级镜像 | `GET/PUT /client-updates/{name}`，目录 `{ABP_DATA_DIR}/client-updates` |
 
-`ABP_SECURE_COOKIES=true`，`ABP_TRUSTED_PROXY_CIDRS` 含 loopback。nginx 设置 HSTS 与请求体上限。
+`ABP_SECURE_COOKIES=true`，`ABP_TRUSTED_PROXY_CIDRS` 含 loopback。nginx 设置 HSTS 与请求体上限；`/client-updates/` 单独 80MiB / 300s，供 ~20MB 客户端二进制。
 
 ### 19.2 Docker / Caddy（尚未实现）
 
@@ -1464,6 +1467,7 @@ Artifact 上传前检查配额。数据库无法写入时 `/health/ready` 必须
 - 数据库迁移只能向前自动执行。
 - `board-server version` 与 `board-client version` 输出版本、commit、build time。
 - 协议按 `schema_version` 协商；服务器至少兼容当前和前一个客户端小版本。
+- linux `board-client` 自动升级走看板 `/client-updates` 镜像（见 §14.11），不要依赖腾讯云直连 GitHub Release CDN。
 
 ## 20. 监控系统自身
 
