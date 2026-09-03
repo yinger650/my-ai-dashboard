@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -138,6 +140,95 @@ func TestGitHubReleaseAPI(t *testing.T) {
 	}
 }
 
+func TestSourcesPrefersBoardMirror(t *testing.T) {
+	got := Sources("http://127.0.0.1:8090", "https://github.com/yinger650/my-ai-dashboard/releases/latest/download")
+	if len(got) != 2 {
+		t.Fatalf("sources = %v", got)
+	}
+	if got[0] != "http://127.0.0.1:8090/client-updates" {
+		t.Fatalf("first source %q", got[0])
+	}
+	if got[1] != "https://github.com/yinger650/my-ai-dashboard/releases/latest/download" {
+		t.Fatalf("second source %q", got[1])
+	}
+	dup := Sources("https://board.yinger650.com/", "https://board.yinger650.com/client-updates")
+	if len(dup) != 1 || dup[0] != "https://board.yinger650.com/client-updates" {
+		t.Fatalf("dedupe = %v", dup)
+	}
+}
+
+func TestGitHubAPIFallbackToDirectURL(t *testing.T) {
+	payload := []byte("fallback-linux-client")
+	sum := sha256.Sum256(payload)
+	digest := hex.EncodeToString(sum[:])
+	manifest := `{"commit":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","binaries":{"linux-amd64":{"name":"board-client-linux-amd64","sha256":"` + digest + `","size":` + strconv.Itoa(len(payload)) + `}}}`
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/yinger650/my-ai-dashboard/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "api down", http.StatusBadGateway)
+	})
+	mux.HandleFunc("/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(manifest))
+	})
+	mux.HandleFunc("/board-client-linux-amd64", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	target, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "board-client")
+	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	u := New("https://github.com/yinger650/my-ai-dashboard/releases/latest/download", Info{Commit: "ffff"}, 0)
+	u.APIBase = srv.URL
+	u.Client.Transport = rewriteHost{host: "github.com", target: target, next: u.Client.Transport}
+	u.GOOS, u.GOARCH = "linux", "amd64"
+	u.ExecPath = func() (string, error) { return exe, nil }
+	u.Exec = func(string, []string, []string) error { return nil }
+
+	_, bin, ok, err := u.Check(context.Background())
+	if err != nil {
+		t.Fatalf("api failure should fall back to direct URL: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected update via direct URL fallback")
+	}
+	if err := u.Apply(context.Background(), bin); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(exe)
+	if string(got) != string(payload) {
+		t.Fatalf("got %q", got)
+	}
+}
+
+type rewriteHost struct {
+	host   string
+	target *url.URL
+	next   http.RoundTripper
+}
+
+func (t rewriteHost) RoundTrip(req *http.Request) (*http.Response, error) {
+	r := req.Clone(req.Context())
+	if strings.EqualFold(r.URL.Host, t.host) {
+		u := *t.target
+		u.Path = strings.TrimRight(t.target.Path, "/") + "/" + path.Base(r.URL.Path)
+		r.URL = &u
+		r.Host = u.Host
+	}
+	next := t.next
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	return next.RoundTrip(r)
+}
+
 func TestGitHubAPIThenCDN(t *testing.T) {
 	payload := []byte("cdn-linux-client")
 	sum := sha256.Sum256(payload)
@@ -204,6 +295,49 @@ func TestGitHubAPIThenCDN(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(exe)
+	if string(got) != string(payload) {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestMirrorToWritesAssets(t *testing.T) {
+	payload := []byte("mirror-linux-client")
+	sum := sha256.Sum256(payload)
+	digest := hex.EncodeToString(sum[:])
+	manifest := `{
+  "schema": 1,
+  "commit": "ffffffffffffffffffffffffffffffffffffffff",
+  "binaries": {
+    "linux-amd64": {"name": "board-client-linux-amd64", "sha256": "` + digest + `", "size": ` + strconv.Itoa(len(payload)) + `}
+  }
+}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(manifest))
+	})
+	mux.HandleFunc("/board-client-linux-amd64", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	})
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(digest + "  board-client-linux-amd64\n"))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	dest := t.TempDir()
+	u := New(srv.URL, Info{Commit: "sync"}, 0)
+	u.GOOS, u.GOARCH = "linux", "amd64"
+	man, err := u.MirrorTo(context.Background(), dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if man.Commit == "" {
+		t.Fatal("empty commit")
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "board-client-linux-amd64"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(got) != string(payload) {
 		t.Fatalf("got %q", got)
 	}

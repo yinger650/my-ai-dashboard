@@ -28,7 +28,7 @@ intervals:
 
 update:
   enabled: true
-  url: "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
+  url: "https://board.yinger650.com/client-updates"
   interval: 1h
 
 local_ingest:

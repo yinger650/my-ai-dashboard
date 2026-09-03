@@ -44,6 +44,8 @@ func (s *Server) Router() http.Handler {
 	// Health endpoints (no auth).
 	r.Get("/health/live", s.handleLive)
 	r.Get("/health/ready", s.handleReady)
+	r.Get("/client-updates/{name}", s.handleGetClientUpdate)
+	r.Put("/client-updates/{name}", s.handlePutClientUpdate)
 
 	// Ingest API (token auth).
 	r.Route("/ingest/v1", func(r chi.Router) {

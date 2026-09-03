@@ -91,20 +91,26 @@ systemctl enable --now board-client
 
 ## 客户端自动编译与升级
 
-GitHub Actions（`.github/workflows/board-client.yml`）在 client 相关提交后交叉编译：
+GitHub Actions（`.github/workflows/board-client.yml`）在 **main** 上 client 相关提交后交叉编译：
 
 - `board-client-linux-amd64`
 - `board-client-linux-arm64`
 
-并发布到滚动 Release：<https://github.com/yinger650/my-ai-dashboard/releases/latest>。
+并发布到滚动 Release：<https://github.com/yinger650/my-ai-dashboard/releases/latest>。GitHub Release 资源会 302 到 `release-assets.githubusercontent.com`（Azure），腾讯云等国内机器经常下载失败，所以生产客户端**优先**从看板自己的镜像拉：
 
-生产 `deploy/client.yaml` 已打开自动升级。客户端会按 `update.interval`（默认 1 小时）对照 `manifest.json` 的 commit：先请求 `api.github.com`，再从 GitHub Release CDN 下载，校验 SHA-256 后替换自身。本地 `go run` 请保持 `update.enabled: false`。
+- 腾讯云本机：`http://127.0.0.1:8090/client-updates`
+- 阿里云远程：`https://board.yinger650.com/client-updates`
+
+`board-server` 提供公开 `GET /client-updates/{name}`，以及带 `ABP_CLIENT_UPDATE_TOKEN` 的 `PUT`。CI 在设置了 `BOARD_CLIENT_UPDATE_TOKEN` secret 时会把产物镜像上去；服务端也会按小时尝试从 GitHub 同步到 `{ABP_DATA_DIR}/client-updates`。客户端仍会校验 SHA-256 再替换自身。本地 `go run` 请保持 `update.enabled: false`。
+
+首次让腾讯云旧客户端也能升上来时：把 `dist/client/*` 拷到 `/var/lib/agentboard/client-updates/`，并把 `/etc/agentboard/client.yaml` 的 `update.url` 改成上面的本机地址（旧二进制只会拼 `url/manifest.json`，不认识 GitHub API）。
 
 手动编译：
 
 ```bash
 make dist-client
 # 产物在 dist/client/
+sudo make install-client-updates   # 拷到 /var/lib/agentboard/client-updates
 ```
 
 ## 本地开发（后端 + 前端 + 客户端同步运行）
@@ -149,6 +155,9 @@ make test-web
 | `ABP_PUBLIC_URL` | 必填（生产） | 对外 URL |
 | `ABP_EVENT_RETENTION_DAYS` | `30` | 事件/滚动日志最多保留一个月 |
 | `ABP_EVENT_QUOTA_BYTES` | `5 GiB` | 日志容量上限，超额删最旧滚动日志 |
+| `ABP_CLIENT_UPDATE_DIR` | `{DATA_DIR}/client-updates` | 滚动 board-client 镜像目录 |
+| `ABP_CLIENT_UPDATE_TOKEN` | 空 | 非空时允许 `PUT /client-updates/{name}` |
+| `ABP_CLIENT_UPDATE_SYNC` | `true` | 启动后从 GitHub 同步镜像（国内机器可能失败，不影响已有文件） |
 
 完整清单见 `internal/config/config.go`。
 

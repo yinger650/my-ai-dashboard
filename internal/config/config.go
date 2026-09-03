@@ -27,6 +27,10 @@ type Config struct {
 	LogLevel           string
 	SecureCookies      bool
 	SecretKeyEnv       string
+	ClientUpdateDir    string
+	ClientUpdateToken  string
+	ClientUpdateSource string
+	ClientUpdateSync   bool
 }
 
 func getenv(key, def string) string {
@@ -74,13 +78,15 @@ func Load() (*Config, error) {
 	dataDir := getenv("ABP_DATA_DIR", "/var/lib/agentboard")
 
 	c := &Config{
-		ListenAddr:   getenv("ABP_LISTEN_ADDR", "127.0.0.1:8080"),
-		PublicURL:    os.Getenv("ABP_PUBLIC_URL"),
-		DataDir:      dataDir,
-		DBPath:       getenv("ABP_DB_PATH", filepath.Join(dataDir, "board.db")),
-		ArtifactDir:  getenv("ABP_ARTIFACT_DIR", filepath.Join(dataDir, "artifacts")),
-		LogLevel:     getenv("ABP_LOG_LEVEL", "info"),
-		SecretKeyEnv: os.Getenv("ABP_SECRET_KEY"),
+		ListenAddr:         getenv("ABP_LISTEN_ADDR", "127.0.0.1:8080"),
+		PublicURL:          os.Getenv("ABP_PUBLIC_URL"),
+		DataDir:            dataDir,
+		DBPath:             getenv("ABP_DB_PATH", filepath.Join(dataDir, "board.db")),
+		ArtifactDir:        getenv("ABP_ARTIFACT_DIR", filepath.Join(dataDir, "artifacts")),
+		LogLevel:           getenv("ABP_LOG_LEVEL", "info"),
+		SecretKeyEnv:       os.Getenv("ABP_SECRET_KEY"),
+		ClientUpdateToken:  os.Getenv("ABP_CLIENT_UPDATE_TOKEN"),
+		ClientUpdateSource: getenv("ABP_CLIENT_UPDATE_SOURCE", "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"),
 	}
 
 	var err error
@@ -107,6 +113,8 @@ func Load() (*Config, error) {
 	}
 
 	c.SecureCookies = getBool("ABP_SECURE_COOKIES", true)
+	c.ClientUpdateSync = getBool("ABP_CLIENT_UPDATE_SYNC", true)
+	c.ClientUpdateDir = getenv("ABP_CLIENT_UPDATE_DIR", filepath.Join(dataDir, "client-updates"))
 
 	if cidrs := os.Getenv("ABP_TRUSTED_PROXY_CIDRS"); cidrs != "" {
 		for _, p := range strings.Split(cidrs, ",") {

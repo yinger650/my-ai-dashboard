@@ -49,6 +49,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 		ArtifactQuotaBytes: 10 * 1024 * 1024,
 		SessionHours:       12,
 		SecureCookies:      false,
+		ClientUpdateDir:    filepath.Join(dir, "client-updates"),
+		ClientUpdateToken:  "update-secret",
 	}
 	if err := os.MkdirAll(cfg.ArtifactDir, 0o750); err != nil {
 		t.Fatal(err)
