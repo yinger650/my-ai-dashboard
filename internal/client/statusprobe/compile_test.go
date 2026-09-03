@@ -15,16 +15,18 @@ import (
 )
 
 type stubProvider struct {
-	text string
-	err  error
-	slow time.Duration
-	n    atomic.Int32
+	text     string
+	err      error
+	slow     time.Duration
+	n        atomic.Int32
+	lastTask atomic.Value
 }
 
 func (s *stubProvider) Name() string { return "stub" }
 
-func (s *stubProvider) Run(ctx context.Context, _ aiprovider.Request) (aiprovider.Result, error) {
+func (s *stubProvider) Run(ctx context.Context, req aiprovider.Request) (aiprovider.Result, error) {
 	s.n.Add(1)
+	s.lastTask.Store(req.Task)
 	if s.slow > 0 {
 		select {
 		case <-ctx.Done():
@@ -82,6 +84,78 @@ func TestPrepareCompilesAndReusesHash(t *testing.T) {
 	}
 	if prov.n.Load() != 1 {
 		t.Fatalf("hash hit should skip AI, calls=%d", prov.n.Load())
+	}
+}
+
+func TestPrepareServiceUsesServicePrompt(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{text: validScript()}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	got := c.Prepare(context.Background(), []config.StatusProbe{{
+		Key: "docker-nginx", Kind: config.StatusProbeService, Name: "容器 Nginx",
+		Intent: "通过 docker exec 检查 nginx",
+	}})
+	if len(got) != 1 || got[0].Kind != config.StatusProbeService || got[0].Name != "容器 Nginx" {
+		t.Fatalf("ready=%+v", got)
+	}
+	if task, _ := prov.lastTask.Load().(string); task != "service_probe_script" {
+		t.Fatalf("task=%q", task)
+	}
+}
+
+func TestPrepareHTTPCompilesCachesAndValidates(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{text: "```json\n" + `{"url":"http://127.0.0.1:18080/health","method":"GET","expect_status":[200,204]}` + "\n```"}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	p := config.StatusProbe{
+		Key: "local-health", Kind: config.StatusProbeHTTP, Name: "本机服务",
+		Intent: "检查 18080 health", TTLSeconds: 180,
+	}
+	got := c.Prepare(context.Background(), []config.StatusProbe{p})
+	if len(got) != 1 || got[0].HTTP == nil {
+		t.Fatalf("ready=%+v", got)
+	}
+	if got[0].HTTP.ServiceKey != p.Key || got[0].HTTP.Name != p.Name || len(got[0].HTTP.ExpectStatus) != 2 {
+		t.Fatalf("target=%+v", got[0].HTTP)
+	}
+	if task, _ := prov.lastTask.Load().(string); task != "http_probe_config" {
+		t.Fatalf("task=%q", task)
+	}
+	if again := c.Prepare(context.Background(), []config.StatusProbe{p}); len(again) != 1 || prov.n.Load() != 1 {
+		t.Fatalf("cache miss ready=%+v calls=%d", again, prov.n.Load())
+	}
+}
+
+func TestPrepareHTTPRejectsUnsafeAndReusesOld(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{text: `{"url":"http://127.0.0.1:18080/health","method":"GET","expect_status":[200]}`}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	p := config.StatusProbe{Key: "health", Kind: config.StatusProbeHTTP, Intent: "health"}
+	if got := c.Prepare(context.Background(), []config.StatusProbe{p}); len(got) != 1 {
+		t.Fatalf("initial=%+v", got)
+	}
+	p.Intent = "changed"
+	prov.text = `{"url":"http://user:secret@127.0.0.1/health","method":"POST","expect_status":[999]}`
+	got := c.Prepare(context.Background(), []config.StatusProbe{p})
+	if len(got) != 1 || got[0].HTTP == nil || got[0].HTTP.URL != "http://127.0.0.1:18080/health" {
+		t.Fatalf("old target not reused: %+v", got)
+	}
+}
+
+func TestIntentKindChangeRecompiles(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{text: validScript()}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	p := config.StatusProbe{Key: "check", Intent: "one"}
+	if len(c.Prepare(context.Background(), []config.StatusProbe{p})) != 1 {
+		t.Fatal("metric prepare failed")
+	}
+	p.Kind = config.StatusProbeService
+	if len(c.Prepare(context.Background(), []config.StatusProbe{p})) != 1 {
+		t.Fatal("service prepare failed")
+	}
+	if prov.n.Load() != 2 {
+		t.Fatalf("kind change should compile, calls=%d", prov.n.Load())
 	}
 }
 
@@ -154,6 +228,20 @@ func TestExtractScript(t *testing.T) {
 	got := ExtractScript("```sh\n#!/bin/sh\necho hi\n```\n")
 	if !strings.Contains(got, "echo hi") {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestValidateGeneratedRejectsNetworkAndToken(t *testing.T) {
+	for _, body := range []string{
+		"#!/bin/sh\ncurl http://example.com",
+		"#!/bin/sh\nwget http://example.com",
+		"#!/bin/sh\necho \"$AGENTBOARD_TOKEN\"",
+		"#!/bin/sh\necho abp_m_secret",
+		"#!/bin/sh\necho /ingest/events",
+	} {
+		if err := validateGenerated(body); err == nil {
+			t.Fatalf("expected rejection: %s", body)
+		}
 	}
 }
 

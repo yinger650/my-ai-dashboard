@@ -41,6 +41,16 @@ func BuildPrompt(req Request) string {
 		b.WriteString("脚本 stdout 必须是窄 JSON：")
 		b.WriteString(`{"state":"running","summary":"...","severity":"normal","statuses":[{"key":"...","label":"...","value":"数字","unit":"%"}]}`)
 		b.WriteString("。value 以数字为主。禁止 curl/wget、禁止读 token 环境变量、禁止调用 ingest、禁止 shell 拼接不可信输入。\n")
+	case "service_probe_script":
+		b.WriteString("任务：根据意图写一段只读 POSIX sh 服务探测脚本。只输出脚本本身，不要解释，不要 Markdown。\n")
+		b.WriteString("脚本 stdout 必须是单个 JSON 对象：")
+		b.WriteString(`{"state":"running","summary":"...","severity":"normal","statuses":[{"key":"...","label":"...","value":"...","unit":""}],"logs":[],"pinned_markdown":""}`)
+		b.WriteString("。可用 docker exec 等只读查询命令；禁止修改服务、curl/wget、读取 token 环境变量、调用 ingest、shell 拼接不可信输入。\n")
+	case "http_probe_config":
+		b.WriteString("任务：把自然语言健康检查转换成 HTTP 探测配置。只输出 JSON，不要 Markdown，不要解释。\n")
+		b.WriteString("格式：")
+		b.WriteString(`{"url":"http://127.0.0.1:8080/health","method":"GET","expect_status":[200],"expect_contains":""}`)
+		b.WriteString("。url 只能是无用户名密码的 http/https 绝对地址；method 只能 GET 或 HEAD；状态码必须在 100-599。\n")
 	default:
 		b.WriteString("任务：总结下面的日志，指出最可能的故障或进展，给出一条处置建议。\n")
 	}
