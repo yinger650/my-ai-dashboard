@@ -1,13 +1,17 @@
-// Package update downloads a newer linux board-client from a GitHub Release.
+// Package update downloads a newer linux board-client from a GitHub Release
+// or from a board-server /client-updates mirror.
 package update
 
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,9 +25,19 @@ import (
 const (
 	// MaxBinaryBytes rejects oversized downloads.
 	MaxBinaryBytes = 80 << 20
-	defaultTimeout = 45 * time.Second
+	// MirrorPath is the board-server route that hosts rolling client assets.
+	MirrorPath     = "/client-updates"
+	defaultTimeout = 10 * time.Minute
 	defaultAPIBase = "https://api.github.com"
 )
+
+// AllowedNames is the set of files a mirror may host or a client may fetch.
+var AllowedNames = map[string]bool{
+	"manifest.json":            true,
+	"SHA256SUMS":               true,
+	"board-client-linux-amd64": true,
+	"board-client-linux-arm64": true,
+}
 
 // Manifest describes the rolling board-client release.
 type Manifest struct {
@@ -60,7 +74,8 @@ type Updater struct {
 	ExecPath func() (string, error)
 	Exec     func(argv0 string, argv []string, envv []string) error
 
-	assetURLs map[string]string
+	assetURLs   map[string]string
+	browserURLs map[string]string
 }
 
 type githubRelease struct {
@@ -69,9 +84,10 @@ type githubRelease struct {
 }
 
 type githubAsset struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Size int64  `json:"size"`
+	Name               string `json:"name"`
+	URL                string `json:"url"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
 }
 
 // New returns an updater for the running process.
@@ -84,9 +100,41 @@ func New(baseURL string, current Info, timeout time.Duration) *Updater {
 		Current:  current,
 		GOOS:     runtime.GOOS,
 		GOARCH:   runtime.GOARCH,
-		Client:   &http.Client{Timeout: timeout},
+		Client:   newHTTPClient(timeout),
 		ExecPath: os.Executable,
 		Exec:     syscall.Exec,
+	}
+}
+
+func newHTTPClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := dialer.DialContext(ctx, "tcp4", addr)
+			if err == nil {
+				return c, nil
+			}
+			return dialer.DialContext(ctx, network, addr)
+		},
+		TLSHandshakeTimeout:   20 * time.Second,
+		ResponseHeaderTimeout: 45 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		ForceAttemptHTTP2:     false,
+		TLSNextProto:          map[string]func(authority string, c *tls.Conn) http.RoundTripper{},
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			if len(via) > 0 && req.URL.Host != via[len(via)-1].URL.Host {
+				req.Header.Del("Accept")
+			}
+			return nil
+		},
 	}
 }
 
@@ -95,6 +143,33 @@ func (u *Updater) apiBase() string {
 		return strings.TrimRight(u.APIBase, "/")
 	}
 	return defaultAPIBase
+}
+
+// BoardMirrorURL is the client-update route on a board-server base URL.
+func BoardMirrorURL(serverURL string) string {
+	return strings.TrimRight(strings.TrimSpace(serverURL), "/") + MirrorPath
+}
+
+// Sources lists upgrade endpoints, preferring the board-server mirror so
+// machines that cannot reach GitHub (Tencent Cloud) still update.
+func Sources(serverURL, configured string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(raw string) {
+		raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+		if raw == "" {
+			return
+		}
+		key := strings.ToLower(raw)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, raw)
+	}
+	add(BoardMirrorURL(serverURL))
+	add(configured)
+	return out
 }
 
 // Platform is the manifest key, e.g. linux-amd64.
@@ -187,11 +262,7 @@ func (u *Updater) Apply(ctx context.Context, bin Binary) error {
 	if err != nil {
 		return err
 	}
-	rawURL := bin.DownloadURL
-	if rawURL == "" {
-		rawURL = u.fileURL(bin.Name)
-	}
-	data, err := u.download(ctx, rawURL, bin.Size, true)
+	data, err := u.downloadAsset(ctx, bin.Name, bin.Size)
 	if err != nil {
 		return err
 	}
@@ -210,24 +281,100 @@ func (u *Updater) Apply(ctx context.Context, bin Binary) error {
 	return u.Exec(exe, os.Args, os.Environ())
 }
 
+// MirrorTo writes the rolling client assets into destDir (manifest + linux binaries).
+func (u *Updater) MirrorTo(ctx context.Context, destDir string) (Manifest, error) {
+	var zero Manifest
+	man, err := u.fetchManifest(ctx)
+	if err != nil {
+		return zero, err
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return zero, err
+	}
+	body, err := u.downloadAsset(ctx, "manifest.json", 1<<20)
+	if err != nil {
+		return zero, err
+	}
+	if err := writeAtomic(filepath.Join(destDir, "manifest.json"), body, 0o644); err != nil {
+		return zero, err
+	}
+	if sums, err := u.downloadAsset(ctx, "SHA256SUMS", 1<<20); err == nil {
+		_ = writeAtomic(filepath.Join(destDir, "SHA256SUMS"), sums, 0o644)
+	}
+	for _, bin := range man.Binaries {
+		if !AllowedNames[bin.Name] {
+			continue
+		}
+		data, err := u.downloadAsset(ctx, bin.Name, bin.Size)
+		if err != nil {
+			return zero, fmt.Errorf("%s: %w", bin.Name, err)
+		}
+		sum := sha256.Sum256(data)
+		got := hex.EncodeToString(sum[:])
+		want := strings.ToLower(strings.TrimSpace(bin.SHA256))
+		if got != want {
+			return zero, fmt.Errorf("%s: sha256 mismatch", bin.Name)
+		}
+		if err := writeAtomic(filepath.Join(destDir, bin.Name), data, 0o755); err != nil {
+			return zero, err
+		}
+	}
+	return man, nil
+}
+
 func (u *Updater) fileURL(name string) string {
 	if u.assetURLs != nil {
 		if s := u.assetURLs[name]; s != "" {
 			return s
 		}
 	}
+	if u.browserURLs != nil {
+		if s := u.browserURLs[name]; s != "" {
+			return s
+		}
+	}
 	return u.BaseURL + "/" + name
+}
+
+func (u *Updater) candidateURLs(name string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return
+		}
+		if _, ok := seen[raw]; ok {
+			return
+		}
+		seen[raw] = struct{}{}
+		out = append(out, raw)
+	}
+	if u.assetURLs != nil {
+		add(u.assetURLs[name])
+	}
+	if u.browserURLs != nil {
+		add(u.browserURLs[name])
+	}
+	add(u.BaseURL + "/" + name)
+	return out
 }
 
 func (u *Updater) fetchManifest(ctx context.Context) (Manifest, error) {
 	var zero Manifest
+	var apiErr error
 	if apiURL, ok := githubReleaseAPI(u.BaseURL, u.apiBase()); ok {
 		if err := u.loadGitHubAssets(ctx, apiURL); err != nil {
-			return zero, err
+			apiErr = err
+			u.assetURLs = nil
+			u.browserURLs = nil
 		}
 	}
-	body, err := u.download(ctx, u.fileURL("manifest.json"), 1<<20, true)
+	body, err := u.downloadAsset(ctx, "manifest.json", 1<<20)
 	if err != nil {
+		if apiErr != nil {
+			return zero, fmt.Errorf("%w (github api: %v)", err, apiErr)
+		}
 		return zero, err
 	}
 	var man Manifest
@@ -250,16 +397,42 @@ func (u *Updater) loadGitHubAssets(ctx context.Context, apiURL string) error {
 		return fmt.Errorf("github release json: %w", err)
 	}
 	urls := make(map[string]string, len(rel.Assets))
+	browser := make(map[string]string, len(rel.Assets))
 	for _, a := range rel.Assets {
-		if a.Name != "" && a.URL != "" {
+		if a.Name == "" {
+			continue
+		}
+		if a.URL != "" {
 			urls[a.Name] = a.URL
 		}
+		if a.BrowserDownloadURL != "" {
+			browser[a.Name] = a.BrowserDownloadURL
+		}
 	}
-	if urls["manifest.json"] == "" {
+	if urls["manifest.json"] == "" && browser["manifest.json"] == "" {
 		return fmt.Errorf("github release has no manifest.json asset")
 	}
 	u.assetURLs = urls
+	u.browserURLs = browser
 	return nil
+}
+
+func (u *Updater) downloadAsset(ctx context.Context, name string, hint int64) ([]byte, error) {
+	if !AllowedNames[name] {
+		return nil, fmt.Errorf("refusing to download %q", name)
+	}
+	var errs []error
+	for _, raw := range u.candidateURLs(name) {
+		data, err := u.download(ctx, raw, hint, true)
+		if err == nil {
+			return data, nil
+		}
+		errs = append(errs, err)
+	}
+	if len(errs) == 0 {
+		return nil, fmt.Errorf("no download URL for %s", name)
+	}
+	return nil, errors.Join(errs...)
 }
 
 func (u *Updater) download(ctx context.Context, rawURL string, hint int64, octet bool) ([]byte, error) {
@@ -313,5 +486,36 @@ func replaceExecutable(dest string, data []byte) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	return nil
+}
+
+func writeAtomic(dest string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(dest)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
+		return err
+	}
+	ok = true
 	return nil
 }

@@ -30,7 +30,7 @@ local_ingest:
 
 update:
   enabled: true
-  url: "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
+  url: "http://127.0.0.1:8090/client-updates"
   interval: 1h
 
 collectors:

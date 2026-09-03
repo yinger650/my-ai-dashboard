@@ -558,26 +558,38 @@ func (r *Runner) maybeUpdate(ctx context.Context) {
 		return
 	}
 	timeout := r.cfg.Server.Timeout.Duration
-	if timeout < 45*time.Second {
-		timeout = 45 * time.Second
+	if timeout < 10*time.Minute {
+		timeout = 10 * time.Minute
 	}
-	up := update.New(r.cfg.Update.URL, r.Build, timeout)
-	man, bin, needed, err := up.Check(ctx)
-	if err != nil {
-		r.log.Warn("client update check failed", "err", err)
+	var lastErr error
+	sawCurrent := false
+	for _, src := range update.Sources(r.cfg.Server.URL, r.cfg.Update.URL) {
+		up := update.New(src, r.Build, timeout)
+		man, bin, needed, err := up.Check(ctx)
+		if err != nil {
+			r.log.Info("client update source skipped", "url", src, "err", err)
+			lastErr = err
+			continue
+		}
+		if !needed {
+			sawCurrent = true
+			r.log.Debug("board-client is current", "url", src, "commit", r.Build.Commit)
+			continue
+		}
+		msg := "正在升级 board-client 到 " + man.Version + " (" + man.Commit + ")"
+		r.log.Info("applying board-client update", "url", src, "version", man.Version, "commit", man.Commit, "asset", bin.Name)
+		r.emitSelfLog(msg, "info")
+		r.drainOnce(ctx)
+		if err := up.Apply(ctx, bin); err != nil {
+			r.log.Warn("client update failed", "url", src, "err", err)
+			r.emitSelfLog("board-client 升级失败："+err.Error(), "warning")
+			lastErr = err
+			continue
+		}
 		return
 	}
-	if !needed {
-		r.log.Debug("board-client is current", "commit", r.Build.Commit)
-		return
-	}
-	msg := "正在升级 board-client 到 " + man.Version + " (" + man.Commit + ")"
-	r.log.Info("applying board-client update", "version", man.Version, "commit", man.Commit, "asset", bin.Name)
-	r.emitSelfLog(msg, "info")
-	r.drainOnce(ctx)
-	if err := up.Apply(ctx, bin); err != nil {
-		r.log.Warn("client update failed", "err", err)
-		r.emitSelfLog("board-client 升级失败："+err.Error(), "warning")
+	if lastErr != nil && !sawCurrent {
+		r.log.Warn("client update check failed", "err", lastErr)
 	}
 }
 
