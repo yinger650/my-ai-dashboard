@@ -122,9 +122,8 @@ func (c *Compiler) prepareOne(ctx context.Context, p config.StatusProbe) (Ready,
 		return base, true
 	}
 	if !c.AIEnabled || c.Provider == nil {
-		if probe.CheckScript(scriptPath) == nil {
-			base.Command = []string{scriptPath}
-			return base, true
+		if ready, ok := reuseOld(base, scriptPath); ok {
+			return ready, true
 		}
 		c.notice("status_probe_skipped", "status_probe "+p.Key+": ai disabled and no compiled script")
 		return Ready{}, false
@@ -169,7 +168,8 @@ func (c *Compiler) prepareOne(ctx context.Context, p config.StatusProbe) (Ready,
 }
 
 func reuseOld(base Ready, scriptPath string) (Ready, bool) {
-	if probe.CheckScript(scriptPath) == nil {
+	metaPath := strings.TrimSuffix(scriptPath, ".sh") + ".meta.json"
+	if probe.CheckScript(scriptPath) == nil && cachedKindOK(metaPath, base.Kind) {
 		base.Command = []string{scriptPath}
 		return base, true
 	}
@@ -347,6 +347,21 @@ func metaHashOK(metaPath, wantHash string) bool {
 	return true
 }
 
+func cachedKindOK(metaPath, wantKind string) bool {
+	b, err := os.ReadFile(metaPath)
+	if err != nil {
+		return wantKind == config.StatusProbeMetric
+	}
+	var m probeMeta
+	if json.Unmarshal(b, &m) != nil {
+		return false
+	}
+	if m.Kind == "" {
+		return wantKind == config.StatusProbeMetric
+	}
+	return m.Kind == wantKind
+}
+
 func writeMeta(path string, m probeMeta) error {
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -364,7 +379,10 @@ func writeScript(path, body string) error {
 
 func validateGenerated(body string) error {
 	low := strings.ToLower(body)
-	for _, bad := range []string{"curl ", "wget ", "abp_m_", "agentboard_token", "/ingest/"} {
+	for _, bad := range []string{
+		"curl ", "wget ", "abp_m_", "agentboard_token", "abp_machine_token",
+		"cursor_api_key", "/ingest/",
+	} {
 		if strings.Contains(low, bad) {
 			return fmt.Errorf("generated script contains forbidden %q", strings.TrimSpace(bad))
 		}

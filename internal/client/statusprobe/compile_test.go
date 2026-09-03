@@ -159,6 +159,23 @@ func TestIntentKindChangeRecompiles(t *testing.T) {
 	}
 }
 
+func TestServiceDoesNotReuseLegacyMetricScript(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "check.sh"), []byte(validScript()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "check.meta.json"), []byte(`{"hash":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &Compiler{Dir: dir, AIEnabled: false}
+	got := c.Prepare(context.Background(), []config.StatusProbe{{
+		Key: "check", Kind: config.StatusProbeService, Intent: "service check",
+	}})
+	if len(got) != 0 {
+		t.Fatalf("service must not reuse legacy metric cache: %+v", got)
+	}
+}
+
 func TestPrepareKeepsOldOnBadScript(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "gpu.sh")
@@ -236,6 +253,8 @@ func TestValidateGeneratedRejectsNetworkAndToken(t *testing.T) {
 		"#!/bin/sh\ncurl http://example.com",
 		"#!/bin/sh\nwget http://example.com",
 		"#!/bin/sh\necho \"$AGENTBOARD_TOKEN\"",
+		"#!/bin/sh\necho \"$ABP_MACHINE_TOKEN\"",
+		"#!/bin/sh\necho \"$CURSOR_API_KEY\"",
 		"#!/bin/sh\necho abp_m_secret",
 		"#!/bin/sh\necho /ingest/events",
 	} {
