@@ -3,24 +3,31 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
+	"agentboard/internal/event"
 	"agentboard/internal/shared"
 )
 
 const (
 	// DefaultEventQuotaBytes is 5 GiB of event payload storage.
 	DefaultEventQuotaBytes int64 = 5 * 1024 * 1024 * 1024
-	retentionBatch               = 2000
-	quotaLoopMax                 = 40
+	// DefaultStaleRunIdle is how long a non-terminal run may go without a new
+	// log.append / log.pin before maintenance closes it.
+	DefaultStaleRunIdle = 24 * time.Hour
+	retentionBatch      = 2000
+	quotaLoopMax        = 40
+	staleRunCloseLog    = "超过 1 天没有新日志，已自动关闭。"
 )
 
 // RetentionPolicy is the time + size cap for server-side history.
 type RetentionPolicy struct {
-	EventDays  int
-	MetricDays int
-	AccessDays int
-	QuotaBytes int64
+	EventDays    int
+	MetricDays   int
+	AccessDays   int
+	QuotaBytes   int64
+	StaleRunIdle time.Duration // 0 means DefaultStaleRunIdle; negative skips close
 }
 
 // RetentionResult is a single maintenance pass.
@@ -29,6 +36,7 @@ type RetentionResult struct {
 	EventsDeleted   int64 `json:"events_deleted"`
 	AccessDeleted   int64 `json:"access_deleted"`
 	RunsDeleted     int64 `json:"runs_deleted"`
+	RunsClosed      int64 `json:"runs_closed"`
 	UsageDeleted    int64 `json:"usage_deleted"`
 	QuotaDeleted    int64 `json:"quota_deleted"`
 	EventsBytes     int64 `json:"events_bytes"`
@@ -36,6 +44,8 @@ type RetentionResult struct {
 
 // ApplyRetention deletes expired sessions, aged history, and oldest events
 // when the payload store is over QuotaBytes. Current-state pins are kept.
+// Non-terminal runs with no new logs for StaleRunIdle are closed first so
+// last-log detection still sees the original events.
 func (s *Store) ApplyRetention(ctx context.Context, p RetentionPolicy) (RetentionResult, error) {
 	var out RetentionResult
 	n, err := s.DeleteExpiredSessions(ctx)
@@ -43,6 +53,18 @@ func (s *Store) ApplyRetention(ctx context.Context, p RetentionPolicy) (Retentio
 		return out, err
 	}
 	out.ExpiredSessions = n
+
+	if p.StaleRunIdle >= 0 {
+		idle := p.StaleRunIdle
+		if idle == 0 {
+			idle = DefaultStaleRunIdle
+		}
+		n, err = s.CloseStaleRuns(ctx, idle)
+		if err != nil {
+			return out, err
+		}
+		out.RunsClosed = n
+	}
 
 	now := shared.NowUTC()
 	if p.EventDays > 0 {
@@ -236,4 +258,146 @@ func (s *Store) enforceEventQuota(ctx context.Context, quota int64) (deleted, by
 		}
 	}
 	return deleted, bytes, nil
+}
+
+type staleRunRow struct {
+	ID        string
+	ServiceID string
+	Status    string
+	CreatedAt string
+	StartedAt sql.NullString
+	MachineID string
+}
+
+// CloseStaleRuns marks non-terminal runs as timed_out (queued → cancelled)
+// when they have had no log.append / log.pin for idle. Runs with no logs
+// use created_at. Does not bump machine last_seen.
+func (s *Store) CloseStaleRuns(ctx context.Context, idle time.Duration) (int64, error) {
+	if idle <= 0 {
+		idle = DefaultStaleRunIdle
+	}
+	now := shared.NowUTC()
+	cutoff := shared.FormatTime(now.Add(-idle))
+	nowISO := shared.FormatTime(now)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT r.id, r.service_id, r.status, r.created_at, r.started_at, sv.machine_id
+		FROM runs r
+		JOIN services sv ON sv.id = r.service_id
+		WHERE r.status IN ('queued','running','waiting_input','blocked')
+		  AND sv.deleted_at IS NULL
+		  AND COALESCE(
+		    (SELECT MAX(e.occurred_at) FROM events e
+		     WHERE e.run_id = r.id AND e.event_type IN ('log.append','log.pin')),
+		    r.created_at
+		  ) < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	var stale []staleRunRow
+	for rows.Next() {
+		var r staleRunRow
+		if err := rows.Scan(&r.ID, &r.ServiceID, &r.Status, &r.CreatedAt, &r.StartedAt, &r.MachineID); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		stale = append(stale, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+
+	touched := map[string]struct{}{}
+	var closed int64
+	for _, r := range stale {
+		to := staleCloseStatus(r.Status)
+		if !event.AllowedTransition(r.Status, to) {
+			continue
+		}
+		start := r.CreatedAt
+		if r.StartedAt.Valid && r.StartedAt.String != "" {
+			start = r.StartedAt.String
+		}
+		dur := durationMsSince(start, now)
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE runs SET status = ?, finished_at = COALESCE(finished_at, ?),
+				duration_ms = COALESCE(duration_ms, ?), updated_at = ?
+			WHERE id = ? AND status = ?`,
+			to, nowISO, dur, nowISO, r.ID, r.Status); err != nil {
+			return 0, err
+		}
+		rtPayload, err := json.Marshal(event.RunTransition{
+			Status:     to,
+			FinishedAt: nowISO,
+			DurationMs: dur,
+			Metadata: map[string]any{
+				"closed_by": "maintenance",
+				"reason":    "no_logs",
+			},
+		})
+		if err != nil {
+			return 0, err
+		}
+		sid, rid := r.ServiceID, r.ID
+		if err := insertMaintenanceEventTx(ctx, tx, r.MachineID, &sid, &rid, event.TypeRunTransition, event.RunSeverity(to), nowISO, rtPayload); err != nil {
+			return 0, err
+		}
+		logPayload, err := json.Marshal(event.LogPayload{
+			Markdown: staleRunCloseLog,
+			Severity: "warning",
+			Source:   "board-server",
+		})
+		if err != nil {
+			return 0, err
+		}
+		if err := insertMaintenanceEventTx(ctx, tx, r.MachineID, &sid, &rid, event.TypeLogAppend, "warning", nowISO, logPayload); err != nil {
+			return 0, err
+		}
+		touched[r.ServiceID] = struct{}{}
+		closed++
+	}
+	for sid := range touched {
+		if err := s.refreshActiveRunSummaryTx(ctx, tx, sid, nowISO); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return closed, nil
+}
+
+func staleCloseStatus(from string) string {
+	if from == "queued" {
+		return "cancelled"
+	}
+	return "timed_out"
+}
+
+func durationMsSince(start string, now time.Time) *int64 {
+	t, err := shared.ParseTime(start)
+	if err != nil {
+		return nil
+	}
+	ms := now.Sub(t).Milliseconds()
+	if ms < 0 {
+		ms = 0
+	}
+	return &ms
+}
+
+func insertMaintenanceEventTx(ctx context.Context, tx *sql.Tx, machineID string, serviceID, runID *string, eventType, severity, at string, payload []byte) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO events (id, event_id, machine_id, service_id, run_id, event_type, severity, occurred_at, received_at, payload_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		shared.NewID(), shared.NewID(), machineID, serviceID, runID, eventType, severity, at, at, string(nonNullJSON(payload)))
+	return err
 }

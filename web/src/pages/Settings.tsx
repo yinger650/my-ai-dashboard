@@ -117,9 +117,16 @@ export function SettingsPage() {
         expired_sessions_deleted: number;
         events_deleted: number;
         access_deleted: number;
+        runs_deleted: number;
+        runs_closed: number;
         quota_deleted: number;
         events_bytes: number;
       }>("/api/v1/admin/maintenance/run", {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["board"] });
+      qc.invalidateQueries({ queryKey: ["service-runs"] });
+      qc.invalidateQueries({ queryKey: ["service-logs"] });
+    },
   });
 
   const resetLayout = useMutation({
@@ -231,7 +238,9 @@ export function SettingsPage() {
           <CardTitle className="flex items-center gap-2">
             <Database className="h-4 w-4 text-indigo-400" /> 日志存储
           </CardTitle>
-          <CardDescription>滚动日志、事件与访问记录最多保留一个月，容量上限 5 GiB。置顶当前态不会被清掉。</CardDescription>
+          <CardDescription>
+            滚动日志、事件与访问记录最多保留一个月，容量上限 5 GiB。置顶当前态不会被清掉。超过 1 天没有新日志的进行中 Run 会直接关闭（timed_out；queued 为 cancelled）。
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-wrap items-end gap-3">
@@ -271,7 +280,8 @@ export function SettingsPage() {
           </div>
           {runMaintenance.data && (
             <p className="text-xs text-slate-400">
-              已删事件 {runMaintenance.data.events_deleted} · 访问 {runMaintenance.data.access_deleted} · 超额{" "}
+              已关闭过期 Run {runMaintenance.data.runs_closed ?? 0} · 已删事件{" "}
+              {runMaintenance.data.events_deleted} · 访问 {runMaintenance.data.access_deleted} · 超额{" "}
               {runMaintenance.data.quota_deleted} · 当前占用 {fmtBytes(runMaintenance.data.events_bytes)}
             </p>
           )}
