@@ -1,12 +1,12 @@
 # AgentBoard Personal 个人服务器与 AI Agent 看板设计规格
 
-> 文档版本：1.2
+> 文档版本：1.3
 >
 > 状态：现行规范（对照仓库实现修订）
 >
-> 更新日期：2026-08-31
+> 更新日期：2026-09-03
 >
-> 基线：1.0（2026-08-18，见 [archive/agentboard-personal-design-spec-v1.0.md](archive/agentboard-personal-design-spec-v1.0.md)）；1.1 为 2026-08-26 对照实现修订
+> 基线：1.0（2026-08-18，见 [archive/agentboard-personal-design-spec-v1.0.md](archive/agentboard-personal-design-spec-v1.0.md)）；1.1 为 2026-08-26 对照实现修订；1.2 为 2026-08-31 AI 总结 / 巡检 / probe
 >
 > 对应仓库版本：`board-server` / `board-client` **0.1.10**（`Makefile` `VERSION`）；客户端心跳上报 `collector_version` 为 **1.3.1**
 >
@@ -29,6 +29,7 @@
 3. **1.0 已写、代码尚未完成的能力**标为「尚未实现」，不得假装已经上线。
 4. **1.0 没有、代码已经上线的能力**标为「1.1 新增」，并写入正文。
 5. **1.2 新增**为 board-client 本地 AI 总结、两轮巡检与 YAML 白名单 probe。
+6. **1.3 新增**为升级后本机配置勾选：身份继承、默认功能目录、YAML overlay、TUI/WEB 同一套勾选（§14.13）。
 
 ### 0.2 1.1 已实现、1.0 未写的能力
 
@@ -49,6 +50,7 @@
 | **（1.2）** AI 主机巡检 | 两轮：固定只读清单 → AI 返回追查 JSON → 客户端按 YAML 白名单执行 → `ai-inspect` 报告 |
 | **（1.2）** 用户 probe 脚本 | 本机 YAML 声明 argv；stdout 窄 schema 映射为已有 Event。board-server **永不**下发命令 |
 | **（1.2）** 客户端升级镜像 | 生产 client 从 `GET /client-updates` 拉包；GitHub Release CDN 仅作后备。见 §14.11 |
+| **（1.3）** 升级后本机配置勾选 | `config tui` / `config web` 展示内置功能目录；key / 上报 URL / token 继承；自定义列表 overlay 保留；新功能默认不自动开启。见 §14.13 |
 
 ### 0.3 相对 1.0 的现行行为偏差
 
@@ -66,7 +68,7 @@
 | 布局 | `localStorage` | 服务端 `board_layout` |
 | 前端路由 | `/settings/machines` 等子页 | 单页 `/settings` |
 | 主题 | 深浅色可切换 | 现行 UI 为深色 |
-| 客户端命令 | run / check-config / ping / once / print-example-config | `run` / `print-example-config` / `version` |
+| 客户端命令 | run / check-config / ping / once / print-example-config | `run` / `wrap` / `config tui` / `config web` / `print-example-config` / `version` |
 | systemd 快照 | 不自动建 Service | 开启 `auto_create_services` 时按 unit 投影为 Service |
 | 每日字节配额 | 必须落库判定 | 表已建，**未读写** |
 | Artifact 下载路由 | `GET /api/v1/artifacts/{id}/download` | 仅 `GET /api/v1/artifacts/{id}/content` |
@@ -868,7 +870,7 @@ board-client print-example-config
 board-client version
 ```
 
-1.0 的 `check-config` / `ping` / `once` 尚未实现。配置只写在**这台机器自己的 YAML**，本机 Web / TUI / 文件改同一份，经 `control.sock` `reload` 或 SIGHUP。**不是**看板 WEB。服务端仍不得向 client 下发命令。
+1.0 的 `check-config` / `ping` / `once` 尚未实现。配置只写在**这台机器自己的 YAML**，本机 Web / TUI / 文件改同一份，经 `control.sock` `reload` 或 SIGHUP。**不是**看板 WEB。服务端仍不得向 client 下发命令。升级后的勾选流程见 §14.13。
 
 ### 14.2 配置文件
 
@@ -1153,25 +1155,22 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 
 无论 Run 挂在哪，终态时再往 **`board-client` 打一条不带 run_key 的 `log.append`**：`完成 task · {service} · {status} · {summary}`。按 `run_key` 去重（inspect-state，最近约 500）。`start`/`running` 不刷这条。
 
-配置三入口（文件 / `config tui` / `config web` loopback）写同一 yaml 并 reload。看板服务端仍不得下发命令。
+配置三入口见 §14.13。看板服务端仍不得下发命令。功能勾选与 overlay 见 §14.13。
 
-### 14.12 机器级 status_probe 与 wrap（本版新增）
+### 14.13 升级后本机配置勾选（1.3 新增）
 
-`machine.status_probes` 是机器级额外指标（GPU、目录占用），**不是** `collectors.probes` 那种 virtual Service。HostSnapshot 主循环照旧立刻跑；启动时另起 goroutine 用本机 AI 编译 POSIX 脚本（已手写 `command` 则跳过），试跑窄 JSON 成功后加入侧路。数字写入下一次 `machine.heartbeat` 的 `metadata`，服务端 `MergeHeartbeatMetrics` 合并进卡片瓦片；JSON `null` 删除该 key，避免 stale。连续失败或从配置移除时 client 发一次 null。`ai.enabled=false` 且没有现成脚本：notice 后跳过。
+自动升级（§14.11）只替换二进制并 `exec`，**禁止**改 YAML。新功能（例如默认 AI 巡检）在旧文件里等于未开启，由用户在本机 `config tui` / `config web` 勾选。
 
-本机要让看板看见「一次任务」，只选一种：
+规则：
 
-| | wrap | agentboard-report |
-|---|---|---|
-| 谁用 | 本机命令/作业 | 编码 Agent 会话 |
-| 怎么进 client | `control.sock` 登记 pid | 现有 `local_ingest` tee |
-| Run 挂在哪 | **`board-client`** | **`proj-{目录名}`** |
-
-`--log` **只读**作业已经在写的文件，禁止把 stdout 转存成用户 log。无 `--log` 则旁路复制 stdout；都空则只看进程、不编造 `log.append`。TTL 到默认不杀进程，只标 `timed_out`；之后 exit 再报会 `invalid_transition`，daemon 对已终态 `run_key` 跳过上报、不产生 notice。
-
-无论 Run 挂在哪，终态时再往 **`board-client` 打一条不带 run_key 的 `log.append`**：`完成 task · {service} · {status} · {summary}`。按 `run_key` 去重（inspect-state，最近约 500）。`start`/`running` 不刷这条。
-
-配置三入口（文件 / `config tui` / `config web` loopback）写同一 yaml 并 reload。看板服务端仍不得下发命令。
+1. **身份继承**：打开配置 UI 时预填 `machine.key`、`display_name`、`server.url`、token（YAML 或 `ABP_MACHINE_TOKEN`）。token 掩码；空提交表示保留原值。
+2. **自定义保留**：`machine.status_probes`、`collectors.http.targets`、`collectors.probes.scripts`、用户改过的 `systemd.include` / `ports.promote`、额外 `ai.summarize` 源、非默认 `allow_commands` **不得**被示例覆盖或删除。
+3. **默认功能勾选**：二进制内置稳定 `id` 的功能目录（CPU / 内存 / 文件系统 / 磁盘 IO / 网络 / 端口 / Docker / Cron / Nginx / systemd / 本机 ingest / 自动升级 / Cursor transcript / HTTP 探测 / probe 脚本 / AI 总开关 / Agent 日志总结 / AI 主机巡检）。TUI 与 WEB 使用同一目录。已在 YAML 中开启的保持勾选；**本次二进制新增且尚未审阅的项默认不勾**，UI 标「新增」。`ai.discover` 展开默认白名单子项（`unit_status` / `unit_journal` / `read_file`）；用户另加的 `allow_commands` 不出现在默认勾选里。
+4. **依赖**：勾选巡检或 Agent 日志总结时，保存时若 `ai.enabled` 仍关则一并打开。取消巡检不得自动关闭总结。第一次勾选且对应子树为空时才写入 catalog seed；已有自定义子树只改 `enabled`。
+5. **YAML overlay**：按路径写入 `yaml.v3` Node，保留注释与未知键。禁止 `Read`（`applyDefaults`）后再整文件 `Marshal`。校验仍走现有 `Load`。保存后 `control.sock` `reload`。
+6. **升级只提醒**：runner 对照 spool `client_state.seen_features` 与目录 id。空 seen 时先把**当前 YAML 已存在/已开启**的 id 记为基线，避免把已在用的 CPU 等标成新增。剩余未审 id 在 `board-client` 上 `log.append` 一条中文说明（含两条 config 命令），并 `status.upsert` `config_new_features`。用户在配置 UI **保存一次**（即使新功能都不勾）把当前目录 id 写入 `seen_features`，提醒消失。升级路径本身不写 YAML。不得自动拉起 TUI（无 TTY）或 WEB（避免突然占端口）。
+7. **首次无文件**：URL 默认 `https://board.yinger650.com`；主机指标类默认勾选；可选能力（AI 巡检、HTTP 探测等）不勾。
+8. WEB 仍仅 loopback。看板 WEB **禁止**下发或编辑 client YAML。
 
 ## 15. Cursor 与 Agent 集成
 
@@ -1538,6 +1537,8 @@ Artifact 上传前检查配额。数据库无法写入时 `/health/ready` 必须
 
 **（1.2）** 客户端 AI / probe 必须覆盖：provider fake exec；prompt 前缀不可被用户覆盖；UNTRUSTED 围栏注入用例；脱敏；guard 拒绝相对路径 / 可写脚本 / 非法 unit / 越界 path；probe JSON 映射；配额计数；hash 去重；`ErrUnavailable` 降级。真模型测试必须环境变量 gate，CI 默认跳过。
 
+**（1.3）** 配置目录 / overlay 必须覆盖：现有 yaml 的开关解读；新 id 判定；seed 只在子树为空时写入；保留注释与自定义列表；不把 `applyDefaults` 的 systemd include 写进原本没有该段的文件；token 空提交不覆盖；未审功能发日志、保存后不再重复。
+
 ### 21.2 前端
 
 必须覆盖：各 health 卡片、离线「最后数据」、**显示/隐藏离线**（默认显示、开关、空状态、`abp.show-offline`）、Markdown 不执行 HTML、Token 明文只在创建 Dialog、Access 异常标红、过期数据横幅。
@@ -1571,6 +1572,8 @@ XSS、`javascript:` 链接、外部图片、路径穿越文件名、MIME 伪装�
 
 **M9（1.2）**：本机 CLI AI 总结、两轮巡检、YAML probe、local ingest tee、配额与降级。单测走 mock；本机可用 stub 与真 `cursor-agent` 验证。
 
+**M10（1.3）**：升级后本机配置勾选（§14.13）：功能目录、YAML overlay、TUI/WEB、`seen_features` 提醒。
+
 后续实现必须按缺口补齐，禁止先搭大量空壳。发现本文与代码矛盾时，先列矛盾再改，不得静默选边。
 
 ## 24. 最终验收清单
@@ -1582,6 +1585,7 @@ XSS、`javascript:` 链接、外部图片、路径穿越文件名、MIME 伪装�
 - [x] 管理员可以创建 Machine 和 Machine / Viewer Token。
 - [x] Linux 客户端采集 CPU/内存/磁盘/网络/端口，可选 systemd / HTTP / transcript。
 - [x] **（1.2）** 本机 AI 总结 / 巡检 / probe 走已有 Event 类型；Key 不进 YAML；CI 不打真实 API。
+- [x] **（1.3）** 本机 `config tui` / `config web` 勾选默认功能；身份继承；自定义 overlay 保留；升级只提醒不改 YAML。
 - [x] Event `event_id` 去重；断网 spool 可补传。
 - [x] Machine online/stale/offline/degraded 按 §13.3 计算。
 - [x] Service TTL 超时显示 stale / 「TTL 过期」。
@@ -1596,7 +1600,7 @@ XSS、`javascript:` 链接、外部图片、路径穿越文件名、MIME 伪装�
 ## 25. 给编码型 AI 的实现约束
 
 ```text
-你要实现或修改 AgentBoard Personal，以《设计规格》1.2 为现行规范。
+你要实现或修改 AgentBoard Personal，以《设计规格》1.3 为现行规范。
 
 规则：
 1. 先读本文 §0 与相关章节，再写代码。
