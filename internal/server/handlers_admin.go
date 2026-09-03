@@ -174,6 +174,7 @@ func (s *Server) handleMaintenanceRun(w http.ResponseWriter, r *http.Request) {
 		"events_deleted":           res.EventsDeleted,
 		"access_deleted":           res.AccessDeleted,
 		"runs_deleted":             res.RunsDeleted,
+		"runs_closed":              res.RunsClosed,
 		"quota_deleted":            res.QuotaDeleted,
 		"events_bytes":             res.EventsBytes,
 	}, nil)

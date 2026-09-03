@@ -25,6 +25,10 @@ func (s *Server) handleServiceDetail(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
+	s.closeStaleRunsBestEffort(r.Context())
+	if fresh, ferr := s.st.GetServiceByID(r.Context(), id); ferr == nil {
+		svc = fresh
+	}
 	statuses, _ := s.st.ListStatuses(r.Context(), id)
 	var pinned *store.PinnedLog
 	if p, perr := s.st.GetPinnedLog(r.Context(), id); perr == nil {
@@ -70,6 +74,7 @@ func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleServiceRuns(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
+	s.closeStaleRunsBestEffort(r.Context())
 	runs, err := s.st.ListRuns(r.Context(), id, 50)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)

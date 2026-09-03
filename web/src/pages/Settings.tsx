@@ -117,9 +117,16 @@ export function SettingsPage() {
         expired_sessions_deleted: number;
         events_deleted: number;
         access_deleted: number;
+        runs_deleted: number;
+        runs_closed: number;
         quota_deleted: number;
         events_bytes: number;
       }>("/api/v1/admin/maintenance/run", {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["board"] });
+      qc.invalidateQueries({ queryKey: ["service-runs"] });
+      qc.invalidateQueries({ queryKey: ["service-logs"] });
+    },
   });
 
   const resetLayout = useMutation({

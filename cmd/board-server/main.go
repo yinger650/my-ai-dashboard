@@ -204,11 +204,12 @@ func runServer() error {
 				log.Warn("retention cleanup failed", "err", err)
 				return
 			}
-			if res.EventsDeleted+res.AccessDeleted+res.QuotaDeleted+res.ExpiredSessions > 0 {
+			if res.EventsDeleted+res.AccessDeleted+res.QuotaDeleted+res.ExpiredSessions+res.RunsClosed+res.RunsDeleted > 0 {
 				log.Info("retention cleanup",
 					"sessions", res.ExpiredSessions,
 					"events", res.EventsDeleted,
 					"access", res.AccessDeleted,
+					"runs_closed", res.RunsClosed,
 					"quota", res.QuotaDeleted,
 					"events_bytes", res.EventsBytes,
 				)
