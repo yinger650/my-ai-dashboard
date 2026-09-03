@@ -36,6 +36,7 @@ export interface BoardService {
   severity: string;
   last_seen_at: string | null;
   running_count?: number;
+  path?: string;
 }
 
 export interface ActiveRun {
@@ -117,6 +118,7 @@ export interface Service {
   last_seen_at: string | null;
   last_run_at: string | null;
   enabled: boolean;
+  path?: string;
 }
 
 export interface StatusItem {

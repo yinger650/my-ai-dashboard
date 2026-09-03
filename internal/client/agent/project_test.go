@@ -214,6 +214,41 @@ func TestCronJobsAndRuns(t *testing.T) {
 	}
 }
 
+func TestProjectAttachesProcessPaths(t *testing.T) {
+	m := meta()
+	m.ExecPath = "/opt/agentboard/bin/board-client"
+	snap := hostsnap.Snapshot{
+		Ports: []hostsnap.Port{{Protocol: "tcp", Address: "0.0.0.0", Port: 80, Process: "nginx", PID: 9, Exe: "/usr/sbin/nginx"}},
+		Nginx: &hostsnap.Nginx{Available: true, PID: 9, Exe: "/usr/sbin/nginx", Proxies: []hostsnap.Proxy{
+			{ServerName: "a", Listen: "80", ListenPort: 80, Location: "/", Upstream: "127.0.0.1:1"},
+		}},
+		Docker: &hostsnap.Docker{Available: true, Exe: "/usr/bin/dockerd"},
+		Cron:   &hostsnap.Cron{Exe: "/usr/sbin/crond"},
+		Units: []hostsnap.Unit{{
+			Unit: "sshd.service", Active: "active", Sub: "running", Description: "OpenSSH", Path: "/usr/sbin/sshd",
+		}},
+	}
+	evs, _ := Project(snap, NewState(), m)
+	want := map[string]string{
+		InspectKey: "/opt/agentboard/bin/board-client",
+		SelfKey:    "/opt/agentboard/bin/board-client",
+		NginxKey:   "/usr/sbin/nginx",
+		DockerKey:  "/usr/bin/dockerd",
+		CronKey:    "/usr/sbin/crond",
+		"sshd":     "/usr/sbin/sshd",
+	}
+	for key, path := range want {
+		states := eventsOf(evs, event.TypeServiceState, key)
+		if len(states) == 0 {
+			t.Fatalf("missing state for %s", key)
+		}
+		ss := states[0].Payload.(event.ServiceState)
+		if ss.Metadata["path"] != path {
+			t.Fatalf("%s path = %#v want %s", key, ss.Metadata["path"], path)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || (func() bool {
 		for i := 0; i+len(sub) <= len(s); i++ {

@@ -128,8 +128,13 @@ func (s *Store) projectTx(ctx context.Context, tx *sql.Tx, env *event.Envelope, 
 			return rejected("validation_failed", "invalid severity", true), nil
 		}
 		severity = ss.Severity
-		if _, err := tx.ExecContext(ctx, `UPDATE services SET current_state = ?, state_summary = CASE WHEN ? = '' THEN state_summary ELSE ? END, severity = ?, ttl_seconds = COALESCE(?, ttl_seconds), last_seen_at = ?, updated_at = ? WHERE id = ?`,
-			ss.State, ss.Summary, ss.Summary, ss.Severity, ss.TTLSeconds, env.OccurredAt, receivedAt, *serviceID); err != nil {
+		var metaJSON string
+		if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM services WHERE id = ?`, *serviceID).Scan(&metaJSON); err != nil {
+			return IngestResult{}, err
+		}
+		merged := MergeServiceMetadata(metaJSON, ss.Metadata)
+		if _, err := tx.ExecContext(ctx, `UPDATE services SET current_state = ?, state_summary = CASE WHEN ? = '' THEN state_summary ELSE ? END, severity = ?, ttl_seconds = COALESCE(?, ttl_seconds), last_seen_at = ?, metadata_json = ?, updated_at = ? WHERE id = ?`,
+			ss.State, ss.Summary, ss.Summary, ss.Severity, ss.TTLSeconds, env.OccurredAt, merged, receivedAt, *serviceID); err != nil {
 			return IngestResult{}, err
 		}
 
@@ -415,10 +420,11 @@ func (s *Store) projectServiceSnapshotTx(ctx context.Context, tx *sql.Tx, env *e
 				continue
 			}
 			sid = shared.NewID()
+			meta := MergeServiceMetadata("{}", map[string]any{"path": u.Path})
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO services (id, machine_id, service_key, name, type, current_state, state_summary, severity, enabled, metadata_json, last_seen_at, created_at, updated_at)
-				VALUES (?, ?, ?, ?, 'daemon', ?, ?, ?, 1, '{}', ?, ?, ?)`,
-				sid, auth.MachineID, key, name, state, summary, sev, env.OccurredAt, now, now); err != nil {
+				VALUES (?, ?, ?, ?, 'daemon', ?, ?, ?, 1, ?, ?, ?, ?)`,
+				sid, auth.MachineID, key, name, state, summary, sev, meta, env.OccurredAt, now, now); err != nil {
 				return IngestResult{}, err
 			}
 			continue
@@ -426,8 +432,13 @@ func (s *Store) projectServiceSnapshotTx(ctx context.Context, tx *sql.Tx, env *e
 		if err != nil {
 			return IngestResult{}, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE services SET current_state = ?, state_summary = ?, severity = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`,
-			state, summary, sev, env.OccurredAt, receivedAt, sid); err != nil {
+		var metaJSON string
+		if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM services WHERE id = ?`, sid).Scan(&metaJSON); err != nil {
+			return IngestResult{}, err
+		}
+		merged := MergeServiceMetadata(metaJSON, map[string]any{"path": u.Path})
+		if _, err := tx.ExecContext(ctx, `UPDATE services SET current_state = ?, state_summary = ?, severity = ?, last_seen_at = ?, metadata_json = ?, updated_at = ? WHERE id = ?`,
+			state, summary, sev, env.OccurredAt, merged, receivedAt, sid); err != nil {
 			return IngestResult{}, err
 		}
 	}

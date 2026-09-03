@@ -43,6 +43,7 @@ type Meta struct {
 	Arch             string
 	Promote          []config.PromoteRule
 	HeartbeatMeta    map[string]any
+	ExecPath         string
 }
 
 // State is remembered across collect rounds so pins and logs only fire on change.
@@ -87,7 +88,7 @@ func Project(snap hostsnap.Snapshot, prev *State, meta Meta) ([]Event, *State) {
 	}
 	var evs []Event
 	evs = append(evs, machineEvents(snap, meta)...)
-	evs = append(evs, inspectAlive()...)
+	evs = append(evs, inspectAlive(meta)...)
 	evs = append(evs, selfEvents(meta)...)
 	evs = append(evs, projectPorts(snap, next, meta)...)
 	evs = append(evs, projectUnits(snap, next)...)
@@ -116,13 +117,15 @@ func machineEvents(snap hostsnap.Snapshot, meta Meta) []Event {
 	}
 }
 
-func inspectAlive() []Event {
+func inspectAlive(meta Meta) []Event {
 	ttl := InspectTTL
+	ss := event.ServiceState{
+		Name: "Host Inspect", Type: "agent", State: "running",
+		Summary: "alive", Severity: "normal", TTLSeconds: &ttl,
+	}
+	ss.SetPath(meta.ExecPath)
 	return []Event{
-		{Type: event.TypeServiceState, ServiceKey: InspectKey, Payload: event.ServiceState{
-			Name: "Host Inspect", Type: "agent", State: "running",
-			Summary: "alive", Severity: "normal", TTLSeconds: &ttl,
-		}},
+		{Type: event.TypeServiceState, ServiceKey: InspectKey, Payload: ss},
 		{Type: event.TypeStatusUpsert, ServiceKey: InspectKey, Payload: event.StatusUpsert{
 			Items: []event.StatusItem{
 				{Key: "alive", Label: "存活", Value: rawBool(true), ValueType: "boolean", Severity: "normal", DisplayFormat: "text", SortOrder: 10},
@@ -132,11 +135,13 @@ func inspectAlive() []Event {
 }
 
 func selfEvents(meta Meta) []Event {
+	ss := event.ServiceState{
+		Name: "Board Client", Type: "daemon", State: "running",
+		Summary: "", Severity: "normal",
+	}
+	ss.SetPath(meta.ExecPath)
 	return []Event{
-		{Type: event.TypeServiceState, ServiceKey: SelfKey, Payload: event.ServiceState{
-			Name: "Board Client", Type: "daemon", State: "running",
-			Summary: "", Severity: "normal",
-		}},
+		{Type: event.TypeServiceState, ServiceKey: SelfKey, Payload: ss},
 		{Type: event.TypeStatusUpsert, ServiceKey: SelfKey, Payload: event.StatusUpsert{
 			Items: []event.StatusItem{
 				{Key: "uptime", Label: "系统运行时间", Value: rawInt(meta.UptimeSeconds), ValueType: "duration", Unit: "s", Severity: "normal", DisplayFormat: "duration", SortOrder: 10},
@@ -157,8 +162,8 @@ func projectPorts(snap hostsnap.Snapshot, st *State, meta Meta) []Event {
 	evs = append(evs, pinIfChanged(st, ListenKey, "Host Listen", "virtual", md, "info")...)
 
 	type agg struct {
-		key, name string
-		items     []event.StatusItem
+		key, name, exe string
+		items          []event.StatusItem
 	}
 	groups := map[string]*agg{}
 	order := []string{}
@@ -169,9 +174,11 @@ func projectPorts(snap hostsnap.Snapshot, st *State, meta Meta) []Event {
 		}
 		g, ok := groups[rule.ServiceKey]
 		if !ok {
-			g = &agg{key: rule.ServiceKey, name: rule.Name}
+			g = &agg{key: rule.ServiceKey, name: rule.Name, exe: p.Exe}
 			groups[rule.ServiceKey] = g
 			order = append(order, rule.ServiceKey)
+		} else if g.exe == "" && p.Exe != "" {
+			g.exe = p.Exe
 		}
 		k := "listen_" + strconv.Itoa(p.Port)
 		val := p.Address + ":" + strconv.Itoa(p.Port) + "/" + p.Protocol
@@ -182,9 +189,11 @@ func projectPorts(snap hostsnap.Snapshot, st *State, meta Meta) []Event {
 	}
 	for _, key := range order {
 		g := groups[key]
-		evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: g.key, Payload: event.ServiceState{
+		ss := event.ServiceState{
 			Name: g.name, Type: "daemon", State: "running", Summary: "listening", Severity: "normal",
-		}})
+		}
+		ss.SetPath(g.exe)
+		evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: g.key, Payload: ss})
 		if len(g.items) > 0 {
 			evs = append(evs, Event{Type: event.TypeStatusUpsert, ServiceKey: g.key, Payload: event.StatusUpsert{Items: g.items}})
 		}
@@ -262,9 +271,11 @@ func projectUnits(snap hostsnap.Snapshot, st *State) []Event {
 		if name == "" {
 			name = key
 		}
-		evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: key, Payload: event.ServiceState{
+		ss := event.ServiceState{
 			Name: name, Type: "daemon", State: state, Summary: summary, Severity: sev,
-		}})
+		}
+		ss.SetPath(u.Path)
+		evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: key, Payload: ss})
 		prev := st.UnitActive[u.Unit]
 		st.UnitActive[u.Unit] = u.Active + "/" + u.Sub
 		if prev != "" && prev != st.UnitActive[u.Unit] && (u.Active == "failed" || u.Active == "inactive") {
@@ -307,10 +318,12 @@ func projectDocker(snap hostsnap.Snapshot, prev, next *State) []Event {
 		return nil
 	}
 	if !snap.Docker.Available {
-		return []Event{{Type: event.TypeServiceState, ServiceKey: DockerKey, Payload: event.ServiceState{
+		ss := event.ServiceState{
 			Name: "Docker", Type: "daemon", State: "unknown",
 			Summary: "未安装或未运行", Severity: "unknown",
-		}}}
+		}
+		ss.SetPath(snap.Docker.Exe)
+		return []Event{{Type: event.TypeServiceState, ServiceKey: DockerKey, Payload: ss}}
 	}
 	running, stopped := 0, 0
 	cur := map[string]string{}
@@ -326,11 +339,13 @@ func projectDocker(snap hostsnap.Snapshot, prev, next *State) []Event {
 	}
 	next.DockerContainers = cur
 	var evs []Event
-	evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: DockerKey, Payload: event.ServiceState{
+	ss := event.ServiceState{
 		Name: "Docker", Type: "daemon", State: "running",
 		Summary:  "运行 " + strconv.Itoa(running) + " · 停止 " + strconv.Itoa(stopped) + " · 镜像 " + strconv.Itoa(snap.Docker.ImageCount),
 		Severity: "normal",
-	}})
+	}
+	ss.SetPath(snap.Docker.Exe)
+	evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: DockerKey, Payload: ss})
 	evs = append(evs, Event{Type: event.TypeStatusUpsert, ServiceKey: DockerKey, Payload: event.StatusUpsert{
 		Items: []event.StatusItem{
 			{Key: "running", Label: "运行中", Value: rawInt(int64(running)), ValueType: "number", Severity: "normal", DisplayFormat: "number", SortOrder: 10},
@@ -409,10 +424,12 @@ func projectCron(snap hostsnap.Snapshot, st *State) []Event {
 	}
 	var evs []Event
 	n := len(jobs)
-	evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: CronKey, Payload: event.ServiceState{
+	ss := event.ServiceState{
 		Name: "Cron", Type: "scheduled", State: "running",
 		Summary: strconv.Itoa(n) + " 条计划", Severity: "normal",
-	}})
+	}
+	ss.SetPath(snap.Cron.Exe)
+	evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: CronKey, Payload: ss})
 	evs = append(evs, Event{Type: event.TypeStatusUpsert, ServiceKey: CronKey, Payload: event.StatusUpsert{
 		Items: []event.StatusItem{
 			{Key: "jobs", Label: "计划数", Value: rawInt(int64(n)), ValueType: "number", Severity: "normal", DisplayFormat: "number", SortOrder: 10},
@@ -494,9 +511,11 @@ func projectNginx(snap hostsnap.Snapshot, prev, next *State) []Event {
 	if !snap.Nginx.Available && len(effective) == 0 {
 		state, sev, summary = "unknown", "unknown", "未发现 nginx 配置"
 	}
-	evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: NginxKey, Payload: event.ServiceState{
+	ss := event.ServiceState{
 		Name: "Nginx", Type: "daemon", State: state, Summary: summary, Severity: sev,
-	}})
+	}
+	ss.SetPath(snap.Nginx.Exe)
+	evs = append(evs, Event{Type: event.TypeServiceState, ServiceKey: NginxKey, Payload: ss})
 	evs = append(evs, Event{Type: event.TypeStatusUpsert, ServiceKey: NginxKey, Payload: event.StatusUpsert{
 		Items: []event.StatusItem{
 			{Key: "proxies", Label: "生效反代", Value: rawInt(int64(len(effective))), ValueType: "number", Severity: "normal", DisplayFormat: "number", SortOrder: 10},

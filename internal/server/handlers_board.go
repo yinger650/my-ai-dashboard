@@ -64,7 +64,7 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 			if !svc.Enabled {
 				continue
 			}
-			services = append(services, map[string]any{
+			row := map[string]any{
 				"id":            svc.ID,
 				"service_key":   svc.ServiceKey,
 				"name":          svc.Name,
@@ -74,7 +74,11 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 				"severity":      svc.Severity,
 				"last_seen_at":  svc.LastSeenAt,
 				"running_count": runCounts[svc.ID],
-			})
+			}
+			if svc.Path != "" {
+				row["path"] = svc.Path
+			}
+			services = append(services, row)
 		}
 
 		out = append(out, map[string]any{

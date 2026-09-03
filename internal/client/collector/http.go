@@ -181,6 +181,7 @@ func (r HTTPResult) ServiceState(ttlSeconds int, warnLatency time.Duration) even
 		Severity: severity,
 		Metadata: map[string]any{"url": r.Target.URL},
 	}
+	ss.SetPath(r.Target.URL)
 	if ttlSeconds > 0 {
 		ss.TTLSeconds = &ttlSeconds
 	}

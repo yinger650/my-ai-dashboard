@@ -11,6 +11,7 @@ import { collectPercentMetrics } from "../lib/board-metrics";
 import { userFacingStatuses } from "../lib/status-filter";
 import { markServiceLogsSeen } from "../lib/log-seen";
 import { toggleRunKey } from "../lib/run-logs";
+import { ServicePathLine } from "../components/ServicePath";
 
 interface ServiceDetail {
   service: Service;
@@ -72,11 +73,14 @@ export function ServiceDetailPage() {
           ← {machine.name}
         </Link>
       )}
-      <div className="mb-5 flex flex-wrap items-center gap-3">
-        <SevDot severity={s.severity} />
-        <h1 className="text-xl font-semibold tracking-tight">{s.name}</h1>
-        <span className="rounded border border-[#1f2a44] px-1.5 py-0.5 font-mono text-[11px] text-slate-400">{s.type}</span>
-        <span className="text-sm text-slate-400">{s.state_summary || s.current_state}</span>
+      <div className="mb-5">
+        <div className="flex flex-wrap items-center gap-3">
+          <SevDot severity={s.severity} />
+          <h1 className="text-xl font-semibold tracking-tight">{s.name}</h1>
+          <span className="rounded border border-[#1f2a44] px-1.5 py-0.5 font-mono text-[11px] text-slate-400">{s.type}</span>
+          <span className="text-sm text-slate-400">{s.state_summary || s.current_state}</span>
+        </div>
+        <ServicePathLine path={s.path} />
       </div>
 
       {percentStats.length > 0 && (

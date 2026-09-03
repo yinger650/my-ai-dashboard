@@ -477,6 +477,8 @@ Machine Token 自动创建 Service：
 
 `state` 是来源状态文本，最长 32 字符；`severity` 只能是 `normal/info/warning/error/unknown`。如果服务不存在且 Machine 允许自动创建，则按 `service_key` 创建；否则返回 404。
 
+`metadata.path` 为服务主进程路径（优先 `/proc/<pid>/exe`，否则 systemd `ExecStart` 的二进制）。HTTP 探测类 virtual service 把探测 URL 同时写入 `metadata.path` 与 `metadata.url`。服务端把这两个字段 merge 进 `services.metadata_json`，看板 API 以 `path` 返回。空值不覆盖已有路径。
+
 ### 11.6 `status.upsert`
 
 一条事件最多 50 个 item。`key` 匹配 `[a-zA-Z0-9_.-]{1,64}`。Agent 心跳**不**再写入 `alive` / `provider` / `last_heartbeat`（存活看 `service.state` 的 TTL）。HTTP 探测常用 `http_status`、`latency_ms`、`ssl_days`。展示过滤见 §16.3.4。
@@ -1051,7 +1053,7 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 | 期望状态码且无传输错误 | `running` / normal |
 | 非期望状态码、超时、连接失败 | `failed` / error |
 
-同时 `status.upsert`：`http_status`、`latency_ms`、可选 `ssl_days`。状态变化时 `log.append`。`ttl_seconds` 默认 180，避免探测进程挂掉后服务永远显示 running。
+同时 `status.upsert`：`http_status`、`latency_ms`、可选 `ssl_days`。状态变化时 `log.append`。`ttl_seconds` 默认 180，避免探测进程挂掉后服务永远显示 running。`service.state.metadata.path` / `url` 为探测 URL（例如 `https://yinger650.com/`），不是站点主机上的 nginx 路径。
 
 远程只跑客户端的部署见 `deploy/client-aliyun.yaml` 与 `deploy/board-client-remote.service`。User-Agent：`AgentBoard-Client/1.2 (+https://board.yinger650.com)`。
 
@@ -1134,6 +1136,24 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 与 client 相关的提交由 GitHub Actions 交叉编译 `board-client-linux-amd64` 与 `board-client-linux-arm64`，覆盖滚动 Release 标签 `board-client`（`/releases/latest`）。产物含 `manifest.json` 与 `SHA256SUMS`。
 
 客户端配置 `update.enabled: true` 后，启动约 15 秒及之后每隔 `update.interval`（默认 1h）对照 `manifest.json` 的 commit。**优先**请求 `{server.url}/client-updates`（腾讯云本机即 `http://127.0.0.1:8090/client-updates`），失败再试配置里的 `update.url`。GitHub Release 现会 302 到 `release-assets.githubusercontent.com`（Azure），国内机器经常超时或被阻断，因此生产 YAML 必须指向看板镜像，而不是 GitHub。`board-server` 公开 `GET /client-updates/{name}`，`PUT` 需 `ABP_CLIENT_UPDATE_TOKEN`；main 上的 GitHub Actions 在配置了 `BOARD_CLIENT_UPDATE_TOKEN` 时把产物镜像上去。校验 SHA-256 后替换当前可执行文件并 `exec`。开发用 `go run` 应保持 `enabled: false`。当前只支持 linux `amd64` / `arm64`。
+
+### 14.12 机器级 status_probe 与 wrap（本版新增）
+
+`machine.status_probes` 是机器级额外指标（GPU、目录占用），**不是** `collectors.probes` 那种 virtual Service。HostSnapshot 主循环照旧立刻跑；启动时另起 goroutine 用本机 AI 编译 POSIX 脚本（已手写 `command` 则跳过），试跑窄 JSON 成功后加入侧路。数字写入下一次 `machine.heartbeat` 的 `metadata`，服务端 `MergeHeartbeatMetrics` 合并进卡片瓦片；JSON `null` 删除该 key，避免 stale。连续失败或从配置移除时 client 发一次 null。`ai.enabled=false` 且没有现成脚本：notice 后跳过。
+
+本机要让看板看见「一次任务」，只选一种：
+
+| | wrap | agentboard-report |
+|---|---|---|
+| 谁用 | 本机命令/作业 | 编码 Agent 会话 |
+| 怎么进 client | `control.sock` 登记 pid | 现有 `local_ingest` tee |
+| Run 挂在哪 | **`board-client`** | **`proj-{目录名}`** |
+
+`--log` **只读**作业已经在写的文件，禁止把 stdout 转存成用户 log。无 `--log` 则旁路复制 stdout；都空则只看进程、不编造 `log.append`。TTL 到默认不杀进程，只标 `timed_out`；之后 exit 再报会 `invalid_transition`，daemon 对已终态 `run_key` 跳过上报、不产生 notice。
+
+无论 Run 挂在哪，终态时再往 **`board-client` 打一条不带 run_key 的 `log.append`**：`完成 task · {service} · {status} · {summary}`。按 `run_key` 去重（inspect-state，最近约 500）。`start`/`running` 不刷这条。
+
+配置三入口（文件 / `config tui` / `config web` loopback）写同一 yaml 并 reload。看板服务端仍不得下发命令。
 
 ### 14.12 机器级 status_probe 与 wrap（本版新增）
 
