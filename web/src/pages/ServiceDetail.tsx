@@ -12,6 +12,7 @@ import { userFacingStatuses } from "../lib/status-filter";
 import { isActiveRunStatus } from "../lib/active-runs";
 import { markServiceLogsSeen } from "../lib/log-seen";
 import { fmtBytes, localTime } from "../format";
+import { ServicePathLine } from "../components/ServicePath";
 
 interface ServiceDetail {
   service: Service;
@@ -90,11 +91,14 @@ export function ServiceDetailPage() {
           ← {machine.name}
         </Link>
       )}
-      <div className="mb-5 flex flex-wrap items-center gap-3">
-        <SevDot severity={s.severity} />
-        <h1 className="text-2xl font-semibold">{s.name}</h1>
-        <span className="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-400">{s.type}</span>
-        <span className="text-sm text-slate-400">{s.state_summary || s.current_state}</span>
+      <div className="mb-5">
+        <div className="flex flex-wrap items-center gap-3">
+          <SevDot severity={s.severity} />
+          <h1 className="text-2xl font-semibold">{s.name}</h1>
+          <span className="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-400">{s.type}</span>
+          <span className="text-sm text-slate-400">{s.state_summary || s.current_state}</span>
+        </div>
+        <ServicePathLine path={s.path} />
       </div>
 
       {percentStats.length > 0 && (

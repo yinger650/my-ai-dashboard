@@ -160,4 +160,7 @@ func TestProbeAllPreservesOrder(t *testing.T) {
 	if ss.Type != "virtual" || ss.State != "failed" || ss.TTLSeconds == nil || *ss.TTLSeconds != 180 {
 		t.Fatalf("service state = %+v", ss)
 	}
+	if ss.Metadata["url"] != results[1].Target.URL || ss.Metadata["path"] != results[1].Target.URL {
+		t.Fatalf("probe metadata = %#v", ss.Metadata)
+	}
 }

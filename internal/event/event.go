@@ -5,6 +5,7 @@ package event
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 )
 
 // Event types (spec 11.2).
@@ -99,6 +100,22 @@ type ServiceState struct {
 	Metadata   map[string]any `json:"metadata"`
 }
 
+// SetPath records the main process path (or HTTP probe URL) in metadata.path.
+// Empty path is ignored so a later heartbeat cannot wipe a known path.
+func (s *ServiceState) SetPath(path string) {
+	if s == nil {
+		return
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	if s.Metadata == nil {
+		s.Metadata = map[string]any{}
+	}
+	s.Metadata["path"] = path
+}
+
 // StatusItem is one entry of a status.upsert.
 type StatusItem struct {
 	Key           string          `json:"key"`
@@ -157,6 +174,7 @@ type SnapshotUnit struct {
 	Sub         string `json:"sub,omitempty"`
 	Description string `json:"description,omitempty"`
 	Name        string `json:"name,omitempty"`
+	Path        string `json:"path,omitempty"`
 }
 
 // ServiceSnapshot is the payload for machine.service_snapshot.

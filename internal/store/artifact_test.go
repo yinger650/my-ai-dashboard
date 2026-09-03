@@ -22,7 +22,7 @@ func TestServiceSnapshotProjectsUnits(t *testing.T) {
 
 	res, err := st.IngestEvent(ctx, mkEnv(t, event.TypeServiceSnapshot, "", "", event.ServiceSnapshot{
 		Units: []event.SnapshotUnit{
-			{Unit: "nginx.service", Active: "active", Sub: "running", Description: "nginx"},
+			{Unit: "nginx.service", Active: "active", Sub: "running", Description: "nginx", Path: "/usr/sbin/nginx"},
 			{Unit: "sshd.service", Active: "failed", Sub: "failed", Description: "sshd"},
 			{Unit: "bad unit", Active: "active"}, // skipped: invalid key
 		},
@@ -37,6 +37,9 @@ func TestServiceSnapshotProjectsUnits(t *testing.T) {
 	}
 	if nginx.Type != "daemon" || nginx.CurrentState != "running" || nginx.Severity != "normal" {
 		t.Fatalf("nginx projection: %+v", nginx)
+	}
+	if nginx.Path != "/usr/sbin/nginx" {
+		t.Fatalf("nginx snapshot path: %+v", nginx)
 	}
 	sshd, err := st.GetServiceByKey(ctx, m.ID, "sshd.service")
 	if err != nil {

@@ -95,6 +95,40 @@ func TestIngestProjectionsAndDuplicates(t *testing.T) {
 		t.Fatalf("service state not projected: %+v", svc)
 	}
 
+	res, err = st.IngestEvent(ctx, mkEnv(t, event.TypeServiceState, "nginx", "", event.ServiceState{
+		Name: "Nginx", Type: "daemon", State: "running", Severity: "normal",
+		Metadata: map[string]any{"path": "/usr/sbin/nginx"},
+	}), auth, now)
+	if err != nil || res.Status != "accepted" {
+		t.Fatalf("service.state path: %v %+v", err, res)
+	}
+	svc, err = st.GetServiceByKey(ctx, m.ID, "nginx")
+	if err != nil || svc.Path != "/usr/sbin/nginx" {
+		t.Fatalf("path not stored: %v %+v", err, svc)
+	}
+	res, err = st.IngestEvent(ctx, mkEnv(t, event.TypeServiceState, "nginx", "", event.ServiceState{
+		Name: "Nginx", Type: "daemon", State: "running", Severity: "normal",
+	}), auth, now)
+	if err != nil || res.Status != "accepted" {
+		t.Fatalf("service.state keep path: %v %+v", err, res)
+	}
+	svc, _ = st.GetServiceByKey(ctx, m.ID, "nginx")
+	if svc.Path != "/usr/sbin/nginx" {
+		t.Fatalf("path cleared on empty metadata: %+v", svc)
+	}
+
+	res, err = st.IngestEvent(ctx, mkEnv(t, event.TypeServiceState, "site-yinger650", "", event.ServiceState{
+		Name: "yinger650.com", Type: "virtual", State: "failed", Severity: "error",
+		Metadata: map[string]any{"url": "https://yinger650.com/"},
+	}), auth, now)
+	if err != nil || res.Status != "accepted" {
+		t.Fatalf("http url: %v %+v", err, res)
+	}
+	site, err := st.GetServiceByKey(ctx, m.ID, "site-yinger650")
+	if err != nil || site.Path != "https://yinger650.com/" {
+		t.Fatalf("url fallback path: %v %+v", err, site)
+	}
+
 	// status.upsert
 	res, err = st.IngestEvent(ctx, mkEnv(t, event.TypeStatusUpsert, "nginx", "", event.StatusUpsert{Items: []event.StatusItem{{Key: "q", Label: "queue", Value: json.RawMessage("4"), ValueType: "number", Severity: "warning"}}}), auth, now)
 	if err != nil || res.Status != "accepted" {

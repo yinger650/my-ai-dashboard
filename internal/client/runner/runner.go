@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -139,6 +140,7 @@ func (r *Runner) collectAndProject() {
 		UptimeSeconds:    snap.UptimeSeconds,
 		SpoolQueued:      n,
 		Promote:          r.cfg.Collectors.Ports.Promote,
+		ExecPath:         clientExecPath(),
 	}
 	evs, next := agent.Project(snap, r.proj, meta)
 	if r.cronTail != nil {
@@ -168,10 +170,12 @@ func (r *Runner) emitHeartbeatAlive() {
 		UptimeSeconds:            r.col.Uptime(),
 	})
 	ttl := agent.InspectTTL
-	r.enqueue(event.TypeServiceState, agent.InspectKey, "", event.ServiceState{
+	ss := event.ServiceState{
 		Name: "Host Inspect", Type: "agent", State: "running",
 		Summary: "alive", Severity: "normal", TTLSeconds: &ttl,
-	})
+	}
+	ss.SetPath(clientExecPath())
+	r.enqueue(event.TypeServiceState, agent.InspectKey, "", ss)
 	r.enqueue(event.TypeStatusUpsert, selfServiceKey, "", event.StatusUpsert{
 		Items: append([]event.StatusItem{
 			{Key: "uptime", Label: "系统运行时间", Value: json.RawMessage(itoa(r.col.Uptime())), ValueType: "duration", Unit: "s", Severity: "normal", DisplayFormat: "duration", SortOrder: 10},
@@ -347,13 +351,15 @@ func (r *Runner) emitCursorAgent() {
 	if n > 0 {
 		state, sev, summary = "running", "normal", "已扫描 "+strconv.Itoa(n)+" 个 transcript"
 	}
-	r.enqueue(event.TypeServiceState, cfg.ServiceKey, "", event.ServiceState{
+	ss := event.ServiceState{
 		Name:     cfg.ServiceName,
 		Type:     "agent",
 		State:    state,
 		Summary:  summary,
 		Severity: sev,
-	})
+	}
+	ss.SetPath(lookPath("cursor-agent"))
+	r.enqueue(event.TypeServiceState, cfg.ServiceKey, "", ss)
 	if n == 0 {
 		return
 	}
@@ -667,10 +673,11 @@ func (r *Runner) emitProbes() {
 		r.mu.Lock()
 		r.lastProbe[s.ServiceKey] = now
 		r.mu.Unlock()
+		scriptPath := probeScriptPath(s.Command)
 		out, trunc, err := probe.RunScript(context.Background(), s.Command, s.Timeout.Duration, s.MaxBytes)
 		if err != nil {
 			for _, e := range probe.FailedState(s.ServiceKey, s.Name, err.Error(), s.TTLSeconds) {
-				r.enqueue(e.Type, e.ServiceKey, "", e.Payload)
+				r.enqueue(e.Type, e.ServiceKey, "", withServicePath(e.Payload, scriptPath))
 			}
 			r.enqueue(event.TypeCollectorNotice, "", "", event.CollectorNotice{
 				Severity: "warning", Code: "probe_failed",
@@ -684,10 +691,12 @@ func (r *Runner) emitProbes() {
 				text += "\n…(truncated)"
 			}
 			ttl := s.TTLSeconds
-			r.enqueue(event.TypeServiceState, s.ServiceKey, "", event.ServiceState{
+			ss := event.ServiceState{
 				Name: s.Name, Type: "virtual", State: "running",
 				Summary: "probe ok", Severity: "normal", TTLSeconds: &ttl,
-			})
+			}
+			ss.SetPath(scriptPath)
+			r.enqueue(event.TypeServiceState, s.ServiceKey, "", ss)
 			appendLog := s.AppendLog == nil || *s.AppendLog
 			if appendLog {
 				r.enqueue(event.TypeLogAppend, s.ServiceKey, "", event.LogPayload{
@@ -703,7 +712,7 @@ func (r *Runner) emitProbes() {
 		parsed, err := probe.ParseJSON(out)
 		if err != nil {
 			for _, e := range probe.FailedState(s.ServiceKey, s.Name, err.Error(), s.TTLSeconds) {
-				r.enqueue(e.Type, e.ServiceKey, "", e.Payload)
+				r.enqueue(e.Type, e.ServiceKey, "", withServicePath(e.Payload, scriptPath))
 			}
 			continue
 		}
@@ -718,7 +727,7 @@ func (r *Runner) emitProbes() {
 		r.probePin[s.ServiceKey] = newHash
 		r.mu.Unlock()
 		for _, e := range evs {
-			r.enqueue(e.Type, e.ServiceKey, "", e.Payload)
+			r.enqueue(e.Type, e.ServiceKey, "", withServicePath(e.Payload, scriptPath))
 		}
 	}
 }
@@ -765,4 +774,39 @@ func (r *Runner) emitAIDiscover() {
 	r.lastDisc = time.Now()
 	evs := aiinspect.Discover(context.Background(), r.sp, r.ensureProvider(), r.cfg.AI, r.runCmd)
 	r.enqueueOut(evs)
+}
+
+func clientExecPath() string {
+	p, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil && real != "" {
+		return real
+	}
+	return p
+}
+
+func lookPath(name string) string {
+	p, err := exec.LookPath(name)
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+func probeScriptPath(cmd []string) string {
+	if len(cmd) == 0 {
+		return ""
+	}
+	return cmd[0]
+}
+
+func withServicePath(payload any, path string) any {
+	ss, ok := payload.(event.ServiceState)
+	if !ok {
+		return payload
+	}
+	ss.SetPath(path)
+	return ss
 }
