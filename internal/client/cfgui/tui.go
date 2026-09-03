@@ -1,4 +1,3 @@
-// Package cfgui is the local (loopback / terminal) editor for client.yaml.
 package cfgui
 
 import (
@@ -16,79 +15,232 @@ import (
 	"golang.org/x/term"
 )
 
+type menuItem struct {
+	n      int
+	kind   string // ident | feat | sub | custom
+	id     string
+	parent string
+}
+
 // RunTUI edits cfgPath interactively.
 func RunTUI(cfgPath string, in io.Reader, out io.Writer) error {
 	if cfgPath == "" {
 		return fmt.Errorf("--config is required")
 	}
-	c, err := config.Read(cfgPath)
-	if err != nil && !os.IsNotExist(err) {
+	m, err := loadModel(cfgPath)
+	if err != nil {
 		return err
-	}
-	if c == nil {
-		c = &config.Config{}
-		c.Version = 1
-		c.Server.URL = "https://board.yinger650.com"
-		c.Machine.Key = "home-server"
 	}
 	br := bufio.NewReader(in)
 	for {
-		fmt.Fprintf(out, "\nboard-client 配置  %s\n", cfgPath)
-		fmt.Fprintf(out, "  1) server.url        %s\n", c.Server.URL)
-		fmt.Fprintf(out, "  2) machine_token     %s\n", maskToken(c.Server.MachineToken))
-		fmt.Fprintf(out, "  3) status_probes     %d 条\n", len(c.Machine.StatusProbes))
-		for i, p := range c.Machine.StatusProbes {
-			fmt.Fprintf(out, "      [%d] %s  intent=%q path=%s interval=%s\n", i, p.Key, p.Intent, p.Path, p.Interval.Duration)
-		}
-		fmt.Fprintf(out, "  s) 保存并 reload\n  q) 退出\n> ")
+		items := printTUI(out, m)
+		fmt.Fprintf(out, "  s) 保存并 reload\n  q) 退出\n  t <id> 按功能 id 勾选\n> ")
 		line, err := br.ReadString('\n')
 		if err != nil && line == "" {
 			return err
 		}
 		line = strings.TrimSpace(line)
-		switch line {
-		case "1":
-			fmt.Fprintf(out, "URL: ")
-			v, _ := br.ReadString('\n')
-			if v = strings.TrimSpace(v); v != "" {
-				c.Server.URL = v
-			}
-		case "2":
-			fmt.Fprintf(out, "machine_token (空则保留): ")
-			var tok string
-			if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-				b, err := term.ReadPassword(int(f.Fd()))
-				fmt.Fprintln(out)
-				if err == nil {
-					tok = string(b)
-				}
-			} else {
-				v, _ := br.ReadString('\n')
-				tok = strings.TrimSpace(v)
-			}
-			if strings.TrimSpace(tok) != "" {
-				c.Server.MachineToken = strings.TrimSpace(tok)
-			}
-		case "3":
-			if err := editProbes(c, br, out); err != nil {
-				return err
-			}
-		case "s", "S":
-			if err := SaveAndReload(cfgPath, c); err != nil {
+		switch {
+		case line == "q" || line == "Q":
+			return nil
+		case line == "s" || line == "S":
+			if err := SaveAndReload(cfgPath, m.edit()); err != nil {
 				fmt.Fprintf(out, "保存失败: %v\n", err)
 				continue
 			}
 			fmt.Fprintln(out, "已写入。daemon 若在跑会 reload。")
-		case "q", "Q":
-			return nil
+			m.Unseen = map[string]bool{}
+		case strings.HasPrefix(line, "t ") || strings.HasPrefix(line, "T "):
+			id := strings.TrimSpace(line[2:])
+			toggleID(m, id)
 		default:
-			fmt.Fprintln(out, "未知命令")
+			n, err := strconv.Atoi(line)
+			if err != nil {
+				fmt.Fprintln(out, "未知命令")
+				continue
+			}
+			it, ok := itemByN(items, n)
+			if !ok {
+				fmt.Fprintln(out, "编号无效")
+				continue
+			}
+			if err := handleItem(m, it, br, in, out); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-func editProbes(c *config.Config, br *bufio.Reader, out io.Writer) error {
+func printTUI(out io.Writer, m *Model) []menuItem {
+	fmt.Fprintf(out, "\nboard-client 配置  %s\n", m.Path)
+	fmt.Fprintln(out, "身份（继承，可改）")
+	n := 1
+	var items []menuItem
+	add := func(kind, id, parent, line string) {
+		items = append(items, menuItem{n: n, kind: kind, id: id, parent: parent})
+		fmt.Fprintf(out, "  %d) %s\n", n, line)
+		n++
+	}
+	add("ident", "url", "", "server.url        "+m.URL)
+	add("ident", "key", "", "machine.key       "+m.Key)
+	add("ident", "name", "", "display_name      "+m.Name)
+	add("ident", "token", "", "machine_token     "+maskToken(m.Token))
+
+	var lastGroup string
+	for _, f := range config.Catalog() {
+		if f.Group != lastGroup {
+			fmt.Fprintf(out, "默认功能 · %s\n", f.Group)
+			lastGroup = f.Group
+		}
+		mark := checkbox(m.Enabled[f.ID])
+		extra := ""
+		if isNew(m, f.ID) {
+			extra = "  新增"
+		}
+		add("feat", f.ID, "", mark+" "+f.Title+extra)
+		for _, s := range f.Subs {
+			sm := checkbox(m.Subs[f.ID][s.ID])
+			sx := ""
+			if isNew(m, f.ID+"."+s.ID) {
+				sx = "  新增"
+			}
+			add("sub", s.ID, f.ID, "    "+sm+" "+s.Title+sx)
+		}
+	}
+	fmt.Fprintln(out, "自定义（保留）")
+	add("custom", "probes", "", fmt.Sprintf("自然语言扩展      %d 条", len(m.Probes)))
+	add("custom", "http", "", fmt.Sprintf("http.targets      %d 条", len(m.HTTP)))
+	add("custom", "scripts", "", fmt.Sprintf("probes.scripts    %d 条", len(m.Scripts)))
+	return items
+}
+
+func checkbox(on bool) string {
+	if on {
+		return "[x]"
+	}
+	return "[ ]"
+}
+
+func itemByN(items []menuItem, n int) (menuItem, bool) {
+	for _, it := range items {
+		if it.n == n {
+			return it, true
+		}
+	}
+	return menuItem{}, false
+}
+
+func handleItem(m *Model, it menuItem, br *bufio.Reader, in io.Reader, out io.Writer) error {
+	switch it.kind {
+	case "ident":
+		return editIdent(m, it.id, br, in, out)
+	case "feat":
+		toggleID(m, it.id)
+	case "sub":
+		if m.Subs[it.parent] == nil {
+			m.Subs[it.parent] = map[string]bool{}
+		}
+		m.Subs[it.parent][it.id] = !m.Subs[it.parent][it.id]
+	case "custom":
+		return editCustom(m, it.id, br, out)
+	}
+	return nil
+}
+
+func toggleID(m *Model, id string) {
+	if _, ok := m.Enabled[id]; ok {
+		m.Enabled[id] = !m.Enabled[id]
+		if id == "ai.discover" && m.Enabled[id] {
+			if m.Subs[id] == nil {
+				m.Subs[id] = map[string]bool{}
+			}
+			any := false
+			for _, v := range m.Subs[id] {
+				if v {
+					any = true
+					break
+				}
+			}
+			if !any {
+				for _, s := range config.DefaultDiscoverSubs() {
+					m.Subs[id][s.ID] = true
+				}
+			}
+		}
+		return
+	}
+	for parent, subs := range m.Subs {
+		if _, ok := subs[id]; ok {
+			m.Subs[parent][id] = !m.Subs[parent][id]
+			return
+		}
+	}
+}
+
+func editIdent(m *Model, id string, br *bufio.Reader, in io.Reader, out io.Writer) error {
+	switch id {
+	case "url":
+		fmt.Fprintf(out, "URL: ")
+		v, _ := readTrim(br)
+		if v != "" {
+			m.URL = v
+		}
+	case "key":
+		fmt.Fprintf(out, "machine.key: ")
+		v, _ := readTrim(br)
+		if v != "" {
+			m.Key = v
+		}
+	case "name":
+		fmt.Fprintf(out, "display_name: ")
+		v, _ := readTrim(br)
+		m.Name = v
+	case "token":
+		fmt.Fprintf(out, "machine_token (空则保留): ")
+		var tok string
+		if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+			b, err := term.ReadPassword(int(f.Fd()))
+			fmt.Fprintln(out)
+			if err == nil {
+				tok = string(b)
+			}
+		} else {
+			tok, _ = readTrim(br)
+		}
+		if strings.TrimSpace(tok) != "" {
+			m.Token = strings.TrimSpace(tok)
+			m.tokenTouched = true
+		}
+	}
+	return nil
+}
+
+func editCustom(m *Model, which string, br *bufio.Reader, out io.Writer) error {
+	switch which {
+	case "probes":
+		m.TouchP = true
+		return editProbes(m, br, out)
+	case "http":
+		m.TouchH = true
+		return editHTTP(m, br, out)
+	case "scripts":
+		m.TouchS = true
+		return editScripts(m, br, out)
+	}
+	return nil
+}
+
+func editProbes(m *Model, br *bufio.Reader, out io.Writer) error {
+	fmt.Fprintln(out, "metric=机器指标  service=虚拟服务  http=HTTP 健康检查")
+	fmt.Fprintln(out, "自然语言编译需要 ai.enabled=true，并在本机设置 CURSOR_API_KEY")
 	fmt.Fprintln(out, "a 添加  d <n> 删除  回车返回")
+	for i, p := range m.Probes {
+		kind := p.Kind
+		if kind == "" {
+			kind = config.StatusProbeMetric
+		}
+		fmt.Fprintf(out, "  [%d] %s  kind=%s name=%q intent=%q path=%s\n", i, p.Key, kind, p.Name, p.Intent, p.Path)
+	}
 	fmt.Fprintf(out, "> ")
 	line, err := br.ReadString('\n')
 	if err != nil && line == "" {
@@ -99,10 +251,16 @@ func editProbes(c *config.Config, br *bufio.Reader, out io.Writer) error {
 	case line == "":
 		return nil
 	case line == "a":
-		p := config.StatusProbe{}
+		p := config.StatusProbe{Kind: config.StatusProbeMetric}
 		fmt.Fprintf(out, "key: ")
 		p.Key, _ = readTrim(br)
-		fmt.Fprintf(out, "intent: ")
+		fmt.Fprintf(out, "kind (metric/service/http，空=metric): ")
+		if kind, _ := readTrim(br); kind != "" {
+			p.Kind = kind
+		}
+		fmt.Fprintf(out, "name (空=key): ")
+		p.Name, _ = readTrim(br)
+		fmt.Fprintf(out, "自然语言描述: ")
 		p.Intent, _ = readTrim(br)
 		fmt.Fprintf(out, "path (可选): ")
 		p.Path, _ = readTrim(br)
@@ -116,14 +274,82 @@ func editProbes(c *config.Config, br *bufio.Reader, out io.Writer) error {
 			}
 			p.Interval.Duration = d
 		}
-		c.Machine.StatusProbes = append(c.Machine.StatusProbes, p)
+		fmt.Fprintf(out, "ttl_seconds (service/http 可选，空=180): ")
+		raw, _ = readTrim(br)
+		if raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 {
+				fmt.Fprintln(out, "ttl_seconds 无效")
+				return nil
+			}
+			p.TTLSeconds = n
+		}
+		m.Probes = append(m.Probes, p)
 	case strings.HasPrefix(line, "d"):
 		n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "d")))
-		if n < 0 || n >= len(c.Machine.StatusProbes) {
+		if n < 0 || n >= len(m.Probes) {
 			fmt.Fprintln(out, "编号无效")
 			return nil
 		}
-		c.Machine.StatusProbes = append(c.Machine.StatusProbes[:n], c.Machine.StatusProbes[n+1:]...)
+		m.Probes = append(m.Probes[:n], m.Probes[n+1:]...)
+	}
+	return nil
+}
+
+func editHTTP(m *Model, br *bufio.Reader, out io.Writer) error {
+	fmt.Fprintln(out, "a 添加  d <n> 删除  回车返回")
+	for i, t := range m.HTTP {
+		fmt.Fprintf(out, "  [%d] %s  %s\n", i, t.ServiceKey, t.URL)
+	}
+	fmt.Fprintf(out, "> ")
+	line, _ := readTrim(br)
+	switch {
+	case line == "":
+		return nil
+	case line == "a":
+		var t config.HTTPTarget
+		fmt.Fprintf(out, "service_key: ")
+		t.ServiceKey, _ = readTrim(br)
+		fmt.Fprintf(out, "name: ")
+		t.Name, _ = readTrim(br)
+		fmt.Fprintf(out, "url: ")
+		t.URL, _ = readTrim(br)
+		m.HTTP = append(m.HTTP, t)
+	case strings.HasPrefix(line, "d"):
+		n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "d")))
+		if n >= 0 && n < len(m.HTTP) {
+			m.HTTP = append(m.HTTP[:n], m.HTTP[n+1:]...)
+		}
+	}
+	return nil
+}
+
+func editScripts(m *Model, br *bufio.Reader, out io.Writer) error {
+	fmt.Fprintln(out, "a 添加  d <n> 删除  回车返回")
+	for i, s := range m.Scripts {
+		fmt.Fprintf(out, "  [%d] %s  %v\n", i, s.ServiceKey, s.Command)
+	}
+	fmt.Fprintf(out, "> ")
+	line, _ := readTrim(br)
+	switch {
+	case line == "":
+		return nil
+	case line == "a":
+		var s config.ProbeScript
+		fmt.Fprintf(out, "service_key: ")
+		s.ServiceKey, _ = readTrim(br)
+		fmt.Fprintf(out, "name: ")
+		s.Name, _ = readTrim(br)
+		fmt.Fprintf(out, "command (空格分隔，绝对路径): ")
+		raw, _ := readTrim(br)
+		s.Command = strings.Fields(raw)
+		s.Format = "json"
+		m.Scripts = append(m.Scripts, s)
+	case strings.HasPrefix(line, "d"):
+		n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "d")))
+		if n >= 0 && n < len(m.Scripts) {
+			m.Scripts = append(m.Scripts[:n], m.Scripts[n+1:]...)
+		}
 	}
 	return nil
 }
@@ -133,26 +359,22 @@ func readTrim(br *bufio.Reader) (string, error) {
 	return strings.TrimSpace(s), err
 }
 
-func maskToken(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" || s == "abp_m_REPLACE_ME" {
-		return "(空)"
-	}
-	if len(s) <= 10 {
-		return "****"
-	}
-	return s[:8] + "…"
-}
-
-// SaveAndReload writes yaml and asks the running daemon to reload.
-func SaveAndReload(cfgPath string, c *config.Config) error {
-	if c.Version == 0 {
-		c.Version = 1
-	}
-	if err := config.AtomicWrite(cfgPath, c); err != nil {
+// SaveAndReload overlays yaml and asks the running daemon to reload.
+func SaveAndReload(cfgPath string, ed config.Edit) error {
+	if err := config.ApplyEdit(cfgPath, ed); err != nil {
 		return err
 	}
-	sock := c.ControlSockPath()
+	doc, cfg, _, err := config.LoadDocument(cfgPath)
+	if err != nil {
+		return err
+	}
+	root := config.DocRoot(doc)
+	markCatalogSeen(config.SpoolPathFromDoc(root))
+	sock := cfg.ControlSockPath()
+	if cfg.Storage.SpoolPath == "" {
+		cfg.Storage.SpoolPath = config.SpoolPathFromDoc(root)
+		sock = cfg.ControlSockPath()
+	}
 	resp, err := control.Call(sock, control.Request{Op: "reload"}, 3*time.Second)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "已写入 %s；daemon 未运行或 reload 失败: %v\n", cfgPath, err)

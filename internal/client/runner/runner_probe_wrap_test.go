@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,6 +167,80 @@ storage:
 	}
 	if !found {
 		t.Fatal("missing heartbeat metadata")
+	}
+}
+
+func TestStatusProbeServiceCreatesOwnedVirtualService(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "nginx.sh")
+	body := "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"running\",\"summary\":\"nginx ok\",\"severity\":\"normal\",\"statuses\":[{\"key\":\"workers\",\"value\":\"4\"}],\"pinned_markdown\":\"容器 nginx 正常\"}'\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := testRunner(t, `version: 1
+server:
+  url: "http://127.0.0.1:9"
+machine:
+  key: "home-server"
+  status_probes:
+    - key: docker-nginx
+      kind: service
+      name: "容器 Nginx"
+      command: ["`+script+`"]
+storage:
+  spool_path: "SPOOL"
+`)
+	r.compileStatusProbes(context.Background())
+	r.emitStatusProbes()
+	types := map[string]int{}
+	for _, env := range drainEnvs(t, r) {
+		if env.ServiceKey != "" && env.ServiceKey != "docker-nginx" {
+			t.Fatalf("unexpected service key %q", env.ServiceKey)
+		}
+		types[env.EventType]++
+	}
+	if types[event.TypeServiceState] != 1 || types[event.TypeStatusUpsert] != 1 || types[event.TypeLogPin] != 1 {
+		t.Fatalf("types=%v", types)
+	}
+}
+
+func TestStatusProbeHTTPUsesCollectorProjection(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer up.Close()
+	r := testRunner(t, `version: 1
+server:
+  url: "http://127.0.0.1:9"
+machine:
+  key: "home-server"
+  status_probes:
+    - key: local-health
+      kind: http
+      name: "本机服务"
+      intent: "检查本机健康接口"
+      timeout: 2s
+storage:
+  spool_path: "SPOOL"
+ai:
+  enabled: true
+  provider: command
+  command: ["/bin/true"]
+`)
+	r.provider = slowProvider{
+		text: `{"url":"` + up.URL + `","method":"GET","expect_status":[204]}`,
+	}
+	r.compileStatusProbes(context.Background())
+	r.emitStatusProbes()
+	types := map[string]int{}
+	for _, env := range drainEnvs(t, r) {
+		if env.ServiceKey != "" && env.ServiceKey != "local-health" {
+			t.Fatalf("unexpected service key %q", env.ServiceKey)
+		}
+		types[env.EventType]++
+	}
+	if types[event.TypeServiceState] != 1 || types[event.TypeStatusUpsert] != 1 || types[event.TypeLogAppend] != 0 {
+		t.Fatalf("types=%v", types)
 	}
 }
 

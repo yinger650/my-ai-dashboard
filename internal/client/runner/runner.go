@@ -231,6 +231,45 @@ func (r *Runner) emitSelfLog(markdown, severity string) {
 	r.enqueue(event.TypeLogAppend, selfServiceKey, "", event.LogPayload{Markdown: markdown, Severity: severity, Source: "board-client"})
 }
 
+func (r *Runner) maybeNotifyNewFeatures() {
+	if r.sp == nil || r.cfg == nil {
+		return
+	}
+	raw, _, _ := r.sp.GetState(config.SeenFeaturesKey)
+	seen := config.ParseSeenIDs(raw)
+	if len(seen) == 0 {
+		seen = config.PresentIDs(r.cfg)
+		_ = r.sp.SetState(config.SeenFeaturesKey, config.EncodeSeenIDs(seen))
+	}
+	unseen := config.UnseenIDs(seen)
+	n := len(unseen)
+	val, _ := json.Marshal(n)
+	r.enqueue(event.TypeStatusUpsert, selfServiceKey, "", event.StatusUpsert{
+		Items: []event.StatusItem{{
+			Key: "config_new_features", Label: "待配置功能", Value: val,
+			ValueType: "number", Severity: "info", DisplayFormat: "number", SortOrder: 30,
+		}},
+	})
+	if n == 0 {
+		return
+	}
+	titles := config.UnseenTitles(seen)
+	if len(titles) == 0 {
+		return
+	}
+	cfgPath := r.cfgPath
+	if cfgPath == "" {
+		cfgPath = "/etc/agentboard/client.yaml"
+	}
+	ver := strings.TrimSpace(r.Build.Version)
+	if ver == "" {
+		ver = "dev"
+	}
+	msg := "board-client " + ver + " 有新功能可配置：" + strings.Join(titles, "、") +
+		"。本机运行：\n`board-client config tui --config " + cfgPath + "`\n`board-client config web --config " + cfgPath + "`"
+	r.emitSelfLog(msg, "info")
+}
+
 func (r *Runner) saveInspectState() {
 	if r.statePath == "" || r.proj == nil {
 		return
@@ -276,6 +315,7 @@ func (r *Runner) Run(ctx context.Context) {
 	r.loadInspectState()
 	r.CollectOnce()
 	r.emitSelfLog("board-client 启动，开始采集系统快照。", "info")
+	r.maybeNotifyNewFeatures()
 
 	var wg sync.WaitGroup
 	go r.compileStatusProbes(ctx)
@@ -505,33 +545,39 @@ func (r *Runner) emitHTTP() {
 	defer cancel()
 	results := collector.ProbeAll(ctx, cfg.Timeout.Duration, r.cfg.HTTPFollowRedirects(), targets)
 	for _, res := range results {
-		key := res.Target.ServiceKey
-		if key == "" {
-			continue
-		}
-		r.enqueue(event.TypeServiceState, key, "", res.ServiceState(cfg.TTLSeconds, cfg.WarnLatency.Duration))
-		items := res.StatusItems(cfg.WarnLatency.Duration)
-		if len(items) > 0 {
-			r.enqueue(event.TypeStatusUpsert, key, "", event.StatusUpsert{Items: items})
-		}
-		prev, seen := r.httpPrev[key]
-		r.httpPrev[key] = res.OK
-		if !seen && res.OK {
-			continue
-		}
-		if seen && prev == res.OK {
-			continue
-		}
-		sev := "error"
-		if res.OK {
-			sev = "info"
-		}
-		r.enqueue(event.TypeLogAppend, key, "", event.LogPayload{
-			Markdown: res.LogMarkdown(),
-			Severity: sev,
-			Source:   "http-probe",
-		})
+		r.enqueueHTTPResult(res, cfg.TTLSeconds, cfg.WarnLatency.Duration)
 	}
+}
+
+func (r *Runner) enqueueHTTPResult(res collector.HTTPResult, ttlSeconds int, warnLatency time.Duration) {
+	key := res.Target.ServiceKey
+	if key == "" {
+		return
+	}
+	r.enqueue(event.TypeServiceState, key, "", res.ServiceState(ttlSeconds, warnLatency))
+	items := res.StatusItems(warnLatency)
+	if len(items) > 0 {
+		r.enqueue(event.TypeStatusUpsert, key, "", event.StatusUpsert{Items: items})
+	}
+	r.mu.Lock()
+	prev, seen := r.httpPrev[key]
+	r.httpPrev[key] = res.OK
+	r.mu.Unlock()
+	if !seen && res.OK {
+		return
+	}
+	if seen && prev == res.OK {
+		return
+	}
+	sev := "error"
+	if res.OK {
+		sev = "info"
+	}
+	r.enqueue(event.TypeLogAppend, key, "", event.LogPayload{
+		Markdown: res.LogMarkdown(),
+		Severity: sev,
+		Source:   "http-probe",
+	})
 }
 
 func (r *Runner) updateLoop(ctx context.Context) {

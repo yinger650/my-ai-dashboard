@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"agentboard/internal/client/collector"
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/probe"
 	"agentboard/internal/client/statusprobe"
@@ -147,17 +148,26 @@ func (r *Runner) emitStatusProbes() {
 		r.mu.Lock()
 		r.lastProbe["sp:"+st.Key] = now
 		r.mu.Unlock()
-		out, _, err := probe.RunScript(context.Background(), st.Command, st.Timeout, 0)
-		if err != nil {
-			r.statusProbeFail(st, err.Error())
-			continue
+		switch st.Kind {
+		case config.StatusProbeHTTP:
+			r.emitStatusHTTP(st)
+		default:
+			out, _, err := probe.RunScript(context.Background(), st.Command, st.Timeout, 0)
+			if err != nil {
+				r.statusProbeFail(st, err.Error())
+				continue
+			}
+			parsed, err := probe.ParseJSON(out)
+			if err != nil {
+				r.statusProbeFail(st, err.Error())
+				continue
+			}
+			if st.Kind == config.StatusProbeService {
+				r.statusServiceOK(st, parsed)
+			} else {
+				r.statusProbeOK(st, parsed)
+			}
 		}
-		parsed, err := probe.ParseJSON(out)
-		if err != nil {
-			r.statusProbeFail(st, err.Error())
-			continue
-		}
-		r.statusProbeOK(st, parsed)
 	}
 }
 
@@ -166,14 +176,61 @@ func (r *Runner) statusProbeFail(st *liveStatus, msg string) {
 		Severity: "warning", Code: "status_probe_failed",
 		Markdown: "status_probe " + st.Key + ": " + msg,
 	})
+	if st.Kind == config.StatusProbeService {
+		for _, e := range probe.FailedState(st.Key, st.Name, msg, st.TTLSeconds) {
+			r.enqueue(e.Type, e.ServiceKey, "", withServicePath(e.Payload, probeScriptPath(st.Command)))
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	st.fails++
-	if st.fails < statusFailLimit {
+	if st.Kind != config.StatusProbeMetric || st.fails < statusFailLimit {
 		return
 	}
 	for _, mk := range r.probeMetaKeys[st.Key] {
 		r.hbMeta[mk] = nil
+	}
+}
+
+func (r *Runner) statusServiceOK(st *liveStatus, parsed probe.Result) {
+	r.mu.Lock()
+	st.fails = 0
+	prev := r.probePin[st.Key]
+	r.mu.Unlock()
+	evs, newHash := probe.MapJSON(st.Key, st.Name, st.TTLSeconds, parsed, prev)
+	r.mu.Lock()
+	r.probePin[st.Key] = newHash
+	r.mu.Unlock()
+	for _, e := range evs {
+		r.enqueue(e.Type, e.ServiceKey, "", withServicePath(e.Payload, probeScriptPath(st.Command)))
+	}
+}
+
+func (r *Runner) emitStatusHTTP(st *liveStatus) {
+	if st.HTTP == nil {
+		r.statusProbeFail(st, "compiled http target missing")
+		return
+	}
+	t := *st.HTTP
+	ctx, cancel := context.WithTimeout(context.Background(), st.Timeout)
+	defer cancel()
+	res := collector.ProbeHTTP(ctx, st.Timeout, r.cfg.HTTPFollowRedirects(), collector.HTTPTarget{
+		ServiceKey: t.ServiceKey, Name: t.Name, URL: t.URL, Method: t.Method,
+		ExpectStatus: t.ExpectStatus, ExpectContains: t.ExpectContains,
+	})
+	r.enqueueHTTPResult(res, st.TTLSeconds, r.cfg.Collectors.HTTP.WarnLatency.Duration)
+	r.mu.Lock()
+	if res.OK {
+		st.fails = 0
+	} else {
+		st.fails++
+	}
+	r.mu.Unlock()
+	if !res.OK {
+		r.enqueue(event.TypeCollectorNotice, "", "", event.CollectorNotice{
+			Severity: "warning", Code: "status_probe_failed",
+			Markdown: "status_probe " + st.Key + ": " + res.Summary,
+		})
 	}
 }
 
