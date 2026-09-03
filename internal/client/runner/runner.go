@@ -545,33 +545,39 @@ func (r *Runner) emitHTTP() {
 	defer cancel()
 	results := collector.ProbeAll(ctx, cfg.Timeout.Duration, r.cfg.HTTPFollowRedirects(), targets)
 	for _, res := range results {
-		key := res.Target.ServiceKey
-		if key == "" {
-			continue
-		}
-		r.enqueue(event.TypeServiceState, key, "", res.ServiceState(cfg.TTLSeconds, cfg.WarnLatency.Duration))
-		items := res.StatusItems(cfg.WarnLatency.Duration)
-		if len(items) > 0 {
-			r.enqueue(event.TypeStatusUpsert, key, "", event.StatusUpsert{Items: items})
-		}
-		prev, seen := r.httpPrev[key]
-		r.httpPrev[key] = res.OK
-		if !seen && res.OK {
-			continue
-		}
-		if seen && prev == res.OK {
-			continue
-		}
-		sev := "error"
-		if res.OK {
-			sev = "info"
-		}
-		r.enqueue(event.TypeLogAppend, key, "", event.LogPayload{
-			Markdown: res.LogMarkdown(),
-			Severity: sev,
-			Source:   "http-probe",
-		})
+		r.enqueueHTTPResult(res, cfg.TTLSeconds, cfg.WarnLatency.Duration)
 	}
+}
+
+func (r *Runner) enqueueHTTPResult(res collector.HTTPResult, ttlSeconds int, warnLatency time.Duration) {
+	key := res.Target.ServiceKey
+	if key == "" {
+		return
+	}
+	r.enqueue(event.TypeServiceState, key, "", res.ServiceState(ttlSeconds, warnLatency))
+	items := res.StatusItems(warnLatency)
+	if len(items) > 0 {
+		r.enqueue(event.TypeStatusUpsert, key, "", event.StatusUpsert{Items: items})
+	}
+	r.mu.Lock()
+	prev, seen := r.httpPrev[key]
+	r.httpPrev[key] = res.OK
+	r.mu.Unlock()
+	if !seen && res.OK {
+		return
+	}
+	if seen && prev == res.OK {
+		return
+	}
+	sev := "error"
+	if res.OK {
+		sev = "info"
+	}
+	r.enqueue(event.TypeLogAppend, key, "", event.LogPayload{
+		Markdown: res.LogMarkdown(),
+		Severity: sev,
+		Source:   "http-probe",
+	})
 }
 
 func (r *Runner) updateLoop(ctx context.Context) {
