@@ -19,7 +19,7 @@ function renderSettings() {
   );
 }
 
-describe("SettingsPage log cleanup", () => {
+describe("SettingsPage log storage", () => {
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",
@@ -43,7 +43,7 @@ describe("SettingsPage log cleanup", () => {
             events_deleted: 2,
             access_deleted: 0,
             runs_deleted: 0,
-            runs_closed: 4,
+            runs_closed: 0,
             quota_deleted: 0,
             events_bytes: 1024,
           });
@@ -57,13 +57,14 @@ describe("SettingsPage log cleanup", () => {
     vi.unstubAllGlobals();
   });
 
-  it("explains stale-run close and reports closed count after cleanup", async () => {
+  it("keeps storage cleanup separate from automatic stale-run close", async () => {
     renderSettings();
-    expect(await screen.findByText(/超过 1\s*天没有新日志的进行中 Run 会直接关闭/)).toBeInTheDocument();
+    expect(await screen.findByText(/滚动日志、事件与访问记录最多保留一个月/)).toBeInTheDocument();
+    expect(screen.queryByText(/超过 1\s*天没有新日志的进行中 Run 会直接关闭/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "立即清理" }));
 
-    expect(await screen.findByText(/已关闭过期 Run 4/)).toBeInTheDocument();
+    expect(await screen.findByText(/已删事件 2/)).toBeInTheDocument();
     await waitFor(() => {
       const calls = vi.mocked(fetch).mock.calls;
       expect(calls.some(([input, init]) => String(input).includes("/admin/maintenance/run") && init?.method === "POST")).toBe(true);

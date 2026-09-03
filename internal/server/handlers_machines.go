@@ -30,6 +30,7 @@ func (s *Server) handleMachineDetail(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
+	s.closeStaleRunsBestEffort(r.Context())
 	latest, _ := s.st.LatestMetric(r.Context(), id)
 	health, resSev := machineHealth(m, latest, time.Now().UTC())
 	statuses, _ := s.st.ListStatusesByMachine(r.Context(), id)

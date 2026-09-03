@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +14,14 @@ import (
 	"agentboard/internal/store"
 )
 
+// closeStaleRunsBestEffort persists timed_out/cancelled for runs with no new
+// logs for a day so board cards drop them from 进行中 without a manual cleanup.
+func (s *Server) closeStaleRunsBestEffort(ctx context.Context) {
+	if _, err := s.st.CloseStaleRuns(ctx, store.DefaultStaleRunIdle); err != nil && s.log != nil {
+		s.log.Warn("close stale runs failed", "err", err)
+	}
+}
+
 func memPct(m *store.MetricSample) *float64 {
 	if m == nil || m.MemoryUsedBytes == nil || m.MemoryTotalBytes == nil || *m.MemoryTotalBytes == 0 {
 		return nil
@@ -23,6 +32,7 @@ func memPct(m *store.MetricSample) *float64 {
 
 func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 	ctx := r.Context()
+	s.closeStaleRunsBestEffort(ctx)
 	now := time.Now().UTC()
 	machines, err := s.st.ListMachines(ctx, false)
 	if err != nil {
@@ -129,6 +139,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBoardTxt(w http.ResponseWriter, r *http.Request) {
+	s.closeStaleRunsBestEffort(r.Context())
 	now := time.Now().UTC()
 	machines, err := s.st.ListMachines(r.Context(), false)
 	if err != nil {
