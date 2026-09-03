@@ -157,6 +157,7 @@ type LogEntry struct {
 	ServiceID   string `json:"service_id,omitempty"`
 	ServiceKey  string `json:"service_key,omitempty"`
 	ServiceName string `json:"service_name,omitempty"`
+	RunKey      string `json:"run_key,omitempty"`
 }
 
 // AccessLog mirrors access_logs.

@@ -51,7 +51,7 @@ export function MachineCard({
   return (
     <article
       className={cn(
-        "flex h-full min-h-0 flex-col rounded-xl border border-slate-800 bg-[#0f1626] p-4 shadow-sm transition",
+        "flex h-full min-h-0 flex-col rounded-[10px] border border-[#1f2a44] bg-[#0f1626] p-3 transition",
         offline && "opacity-70",
         editMode && "ring-1 ring-indigo-500/30",
       )}

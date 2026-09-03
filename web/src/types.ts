@@ -23,6 +23,7 @@ export interface LogEntry {
   service_id?: string;
   service_key?: string;
   service_name?: string;
+  run_key?: string;
 }
 
 export interface BoardService {

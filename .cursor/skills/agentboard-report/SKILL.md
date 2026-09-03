@@ -20,3 +20,5 @@ python3 skills/agentboard-report/scripts/report.py heartbeat "alive"
 ```
 
 OpenClaw：session 开始就 `heartbeat`，之后每 ~60s 再发；TTL 180s 无心跳则看板显示 stale。
+
+本机作业用 `board-client wrap`（`skills/bc-wrapper/SKILL.md`），不要再 `report.py start`。

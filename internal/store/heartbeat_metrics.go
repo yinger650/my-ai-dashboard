@@ -27,16 +27,42 @@ func asFloat(v any) (float64, bool) {
 	}
 }
 
-// MergeHeartbeatMetrics writes numeric heartbeat metadata into metadata_json.
-// A heartbeat with no numeric extras leaves existing metrics unchanged.
+func isNull(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	if ok && strings.EqualFold(strings.TrimSpace(s), "null") {
+		return true
+	}
+	return false
+}
+
+// MergeHeartbeatMetrics merges numeric extras into metadata_json.heartbeat_metrics.
+// Incoming numbers overwrite the same key; JSON null (or the string "null") deletes
+// that key. A heartbeat with neither numbers nor nulls leaves metrics unchanged.
 func MergeHeartbeatMetrics(metadataJSON string, meta map[string]any) string {
-	metrics := map[string]float64{}
+	metrics := ParseHeartbeatMetrics(metadataJSON)
+	changed := false
 	for k, v := range meta {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		if isNull(v) {
+			if _, ok := metrics[k]; ok {
+				delete(metrics, k)
+				changed = true
+			}
+			continue
+		}
 		if n, ok := asFloat(v); ok {
-			metrics[k] = n
+			if cur, exists := metrics[k]; !exists || cur != n {
+				metrics[k] = n
+				changed = true
+			}
 		}
 	}
-	if len(metrics) == 0 {
+	if !changed {
 		if strings.TrimSpace(metadataJSON) == "" {
 			return "{}"
 		}
@@ -49,7 +75,11 @@ func MergeHeartbeatMetrics(metadataJSON string, meta map[string]any) string {
 			obj = map[string]any{}
 		}
 	}
-	obj[HeartbeatMetricsKey] = metrics
+	if len(metrics) == 0 {
+		delete(obj, HeartbeatMetricsKey)
+	} else {
+		obj[HeartbeatMetricsKey] = metrics
+	}
 	b, err := json.Marshal(obj)
 	if err != nil {
 		return metadataJSON

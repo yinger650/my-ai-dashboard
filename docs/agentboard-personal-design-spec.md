@@ -859,11 +859,14 @@ Dashboard 顶部计数（前端）：
 
 ```bash
 board-client run --config /etc/agentboard/client.yaml
+board-client wrap --summary "本机作业" --ttl 6h --log /path/to/job.log -- CMD...
+board-client config tui --config /etc/agentboard/client.yaml
+board-client config web --config /etc/agentboard/client.yaml --listen 127.0.0.1:7439
 board-client print-example-config
 board-client version
 ```
 
-1.0 的 `check-config` / `ping` / `once` 尚未实现。
+1.0 的 `check-config` / `ping` / `once` 尚未实现。配置只写在**这台机器自己的 YAML**，本机 Web / TUI / 文件改同一份，经 `control.sock` `reload` 或 SIGHUP。**不是**看板 WEB。服务端仍不得向 client 下发命令。
 
 ### 14.2 配置文件
 
@@ -873,11 +876,19 @@ board-client version
 version: 1
 server:
   url: "https://board.yinger650.com"
+  machine_token: "abp_m_REPLACE_ME"
   machine_token_env: "ABP_MACHINE_TOKEN"
   timeout: 20s
 machine:
   key: "home-server"
   display_name: "家庭服务器"
+  status_probes:
+    - key: gpu
+      intent: "NVIDIA GPU 利用率 0-100"
+    - key: data_dir
+      intent: "/data 占用百分比"
+      path: /data
+      interval: 60s
 storage:
   spool_path: "/var/lib/agentboard-client/spool.db"
   max_events: 50000
@@ -971,12 +982,12 @@ collectors:
 
 规则：
 
-- Token 只从环境变量读取，禁止写入 YAML。Cursor / 模型 Key 同样只从 `ai.api_key_env` 指向的环境变量读取，禁止写入 YAML。
+- Token：`os.Getenv(server.machine_token_env)` 非空优先，否则用 `server.machine_token`。两者都空（含占位符 `abp_m_REPLACE_ME`）才报错。example 用占位符。日志/dump 继续脱敏。Cursor / 模型 Key 只从 `ai.api_key_env` 指向的环境变量读取，禁止写入 YAML。
 - 支持 `${ENV_NAME}` 展开时，dump/日志必须隐藏名字包含 `TOKEN/KEY/SECRET/PASSWORD` 的值。
 - `tls_insecure_skip_verify=true` 仅供本地测试。
-- 1.0 的任意 journald / file_tail `log_tasks` 与 Cursor Cloud Agents HTTP API **尚未实现**。cron 执行记录只走窄范围尾读。AI 总结与本机 probe 见 §14.9 / §14.10。
+- 1.0 的任意 journald / file_tail `log_tasks` 与 Cursor Cloud Agents HTTP API **尚未实现**。cron 执行记录只走窄范围尾读。AI 总结与本机 probe 见 §14.9 / §14.10。`status_probe` 与 wrap 见 §14.12。
 - 现行 spool 只有 `max_events`，无 `max_bytes`。
-- probe 脚本的环境变量是最小允许集，**禁止**继承 `ABP_MACHINE_TOKEN` 或 `ai.api_key_env` 指向的变量。
+- probe / status_probe 脚本的环境变量是最小允许集，**禁止**继承 `ABP_MACHINE_TOKEN` 或 `ai.api_key_env` 指向的变量。生成脚本不得 `curl` ingest。
 
 ### 14.3 本地 spool
 
@@ -1015,7 +1026,7 @@ Cron（可选）：`cron` scheduled。置顶日程表（几点几分 / 用户 / 
 
 Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` 的反代；重启/全部隐藏写入滚动日志。不上传 access/error 原文。
 
-客户端同时为自己上报 `service_key=board-client` 的 `service.state` 与 `status.upsert`。启动时写一条启动日志，不再周期性刷「采集正常」。
+客户端同时为自己上报 `service_key=board-client` 的 `service.state` 与 `status.upsert`。心跳里 `service.state` 的 **summary 发空字符串**（服务端空值不覆盖），以便有活跃 wrap Run 时卡片显示「N 进行中：…」。启动时写一条启动日志，不再周期性刷「采集正常」。
 
 ### 14.6 日志源
 
@@ -1124,6 +1135,24 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 
 客户端配置 `update.enabled: true` 后，启动约 15 秒及之后每隔 `update.interval`（默认 1h）对照 `manifest.json` 的 commit。**优先**请求 `{server.url}/client-updates`（腾讯云本机即 `http://127.0.0.1:8090/client-updates`），失败再试配置里的 `update.url`。GitHub Release 现会 302 到 `release-assets.githubusercontent.com`（Azure），国内机器经常超时或被阻断，因此生产 YAML 必须指向看板镜像，而不是 GitHub。`board-server` 公开 `GET /client-updates/{name}`，`PUT` 需 `ABP_CLIENT_UPDATE_TOKEN`；main 上的 GitHub Actions 在配置了 `BOARD_CLIENT_UPDATE_TOKEN` 时把产物镜像上去。校验 SHA-256 后替换当前可执行文件并 `exec`。开发用 `go run` 应保持 `enabled: false`。当前只支持 linux `amd64` / `arm64`。
 
+### 14.12 机器级 status_probe 与 wrap（本版新增）
+
+`machine.status_probes` 是机器级额外指标（GPU、目录占用），**不是** `collectors.probes` 那种 virtual Service。HostSnapshot 主循环照旧立刻跑；启动时另起 goroutine 用本机 AI 编译 POSIX 脚本（已手写 `command` 则跳过），试跑窄 JSON 成功后加入侧路。数字写入下一次 `machine.heartbeat` 的 `metadata`，服务端 `MergeHeartbeatMetrics` 合并进卡片瓦片；JSON `null` 删除该 key，避免 stale。连续失败或从配置移除时 client 发一次 null。`ai.enabled=false` 且没有现成脚本：notice 后跳过。
+
+本机要让看板看见「一次任务」，只选一种：
+
+| | wrap | agentboard-report |
+|---|---|---|
+| 谁用 | 本机命令/作业 | 编码 Agent 会话 |
+| 怎么进 client | `control.sock` 登记 pid | 现有 `local_ingest` tee |
+| Run 挂在哪 | **`board-client`** | **`proj-{目录名}`** |
+
+`--log` **只读**作业已经在写的文件，禁止把 stdout 转存成用户 log。无 `--log` 则旁路复制 stdout；都空则只看进程、不编造 `log.append`。TTL 到默认不杀进程，只标 `timed_out`；之后 exit 再报会 `invalid_transition`，daemon 对已终态 `run_key` 跳过上报、不产生 notice。
+
+无论 Run 挂在哪，终态时再往 **`board-client` 打一条不带 run_key 的 `log.append`**：`完成 task · {service} · {status} · {summary}`。按 `run_key` 去重（inspect-state，最近约 500）。`start`/`running` 不刷这条。
+
+配置三入口（文件 / `config tui` / `config web` loopback）写同一 yaml 并 reload。看板服务端仍不得下发命令。
+
 ## 15. Cursor 与 Agent 集成
 
 ### 15.1 Cloud Agents API（1.0 目标，尚未实现）
@@ -1165,6 +1194,7 @@ Agent **自己**发 HTTPS ingest，不是 `board-client`。
 | 产物 | 路径 |
 |---|---|
 | Skill | `skills/agentboard-report/SKILL.md` |
+| wrap | `skills/bc-wrapper/SKILL.md` |
 | 协议 | `skills/agentboard-report/references/protocol.md` |
 | 脚本 | `skills/agentboard-report/scripts/report.py` |
 | Cursor Rule | `.cursor/rules/agentboard-report.mdc` |
@@ -1187,7 +1217,9 @@ python3 skills/agentboard-report/scripts/report.py heartbeat "alive"
 | `report.py`（本 skill） | `AGENTBOARD_TOKEN` | 项目 **virtual** Machine | `cursor` / `codex` / `openclaw` |
 | `board-client` | `ABP_MACHINE_TOKEN` | 该主机 **physical** Machine | `board-client`、systemd、probe、`ai-inspect`、**`proj-*`（本机打开的仓库）** |
 
-发现 loopback ingest 只表示 client 在采集本机；脚本仍直连看板，**禁止**改 skill 身份或借用 client token。advertise `"mode":"tee"` 时，远程成功后再复制事件（含 `workspace`）到 loopback。board-client 把它们投影成 `service_key=proj-{目录名}`：`service.state`、`run.transition`、`log.append`、目录 `status.upsert`。项目根目录优先 git，其次带 `.cursor`/`.codex` 且有项目标记的目录，避免误用家目录上的编辑器配置。
+发现 loopback ingest 只表示 client 在采集本机；脚本仍直连看板，**禁止**改 skill 身份或借用 client token。advertise `"mode":"tee"` 时，远程成功后再复制事件（含 `workspace`）到 loopback。board-client 把它们投影成 `service_key=proj-{目录名}`：`service.state`、`run.transition`、`log.append`、目录 `status.upsert`。项目根目录优先 git，其次带 `.cursor`/`.codex` 且有项目标记的目录，避免误用家目录上的编辑器配置。终态 `run.transition` 时，client 再往物理机 `board-client` 打一条不带 run_key 的「完成 task」滚动日志（按 run_key 去重）。
+
+本机命令/作业用 `board-client wrap`（`skills/bc-wrapper/SKILL.md`），Run 挂在 `board-client`，**不要**再 `report.py start`。编码会话用本 skill。Cloud Agent 无本机 client 时仍只走 report 直连看板。同一 fixture 不既 wrap 又投影为 proj（skill 约束，代码不做硬锁）。
 
 | 命令 | Event |
 |---|---|
@@ -1304,9 +1336,11 @@ Overview：CPU% + 内存% 图；range `1h/6h/24h/7d/30d`。磁盘/网络独立�
 
 Header：名称、类型、当前状态、所属机器。
 
-内容：Status 网格 → 置顶日志（无则不占位）→ 附件 → 日志时间线与 Runs 两栏。
+内容：Status 网格 → 置顶区（始终占位，无内容时显示「暂无置顶」）→ Runs 与日志两栏。不在详情页展示附件。
 
-「生成日志总结」调用 §12.6 summarize。附件显示文件名、大小、类型、下载（走 `/content`）；安全图片类型可内联预览。Markdown 必须 sanitize，禁止原始 HTML。
+Runs 可多选 / 取消；未选中时日志列显示全部，选中后只显示这些 `run_key` 的日志（无 `run_key` 的服务级日志在筛选时隐藏）。日志 API 返回 `run_key`。
+
+「生成日志总结」调用 §12.6 summarize。Markdown 必须 sanitize，禁止原始 HTML。
 
 1.0 的“最新在下自动跳底 / 有新消息按钮 / 虚拟滚动 / 代码块复制”：卡片日志流部分实现了新日志提示；Service 详情页尚未完整按该交互做。
 

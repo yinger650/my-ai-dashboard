@@ -54,13 +54,13 @@ func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
 	cursor := r.URL.Query().Get("cursor")
-	logs, err := s.st.ListServiceLogs(r.Context(), id, cursor, 50)
+	logs, err := s.st.ListServiceLogs(r.Context(), id, cursor, 100)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
 	var next *string
-	if len(logs) == 50 {
+	if len(logs) == 100 {
 		c := logs[len(logs)-1].OccurredAt
 		next = &c
 	}

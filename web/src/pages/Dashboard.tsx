@@ -59,7 +59,7 @@ export function DashboardPage() {
     <div>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{data?.title ?? "AgentBoard Personal"}</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{data?.title ?? "AgentBoard Personal"}</h1>
           <p className="text-sm text-slate-400">
             <span className="sev-normal">在线 {counts.online}</span> ·{" "}
             <span className="sev-warning">降级 {counts.degraded}</span> ·{" "}

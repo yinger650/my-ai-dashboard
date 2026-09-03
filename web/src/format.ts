@@ -42,3 +42,16 @@ export function localTime(iso: string | null | undefined): string {
   if (!iso) return "--";
   return new Date(iso).toLocaleString();
 }
+
+export function fmtDuration(ms: number | null | undefined): string {
+  if (ms == null || ms < 0) return "";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return rem ? `${m}m ${rem}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const min = m % 60;
+  return min ? `${h}h ${min}m` : `${h}h`;
+}

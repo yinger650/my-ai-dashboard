@@ -15,3 +15,7 @@ Token 写在仓库根目录 `.env`（`AGENTBOARD_TOKEN`，不要入库）。脚�
 4. 不要打印 token。上报失败不能中断用户任务。
 5. Cursor：`AGENTBOARD_PROVIDER=cursor`。Codex：`codex`。OpenClaw：`openclaw`，并保持心跳（TTL 180s）。
 6. 每次 `start` 一条新 Run；不要设置 `AGENTBOARD_RUN_KEY`，除非续同一条 Run。
+
+## wrap 与 report 互斥
+
+本机打开的仓库里，编码会话用上面的 `report.py`。本机 shell / 训练作业用 `board-client wrap`（`skills/bc-wrapper/SKILL.md`），不要再 `report.py start`。Cloud Agent 无本机 client 时仍只走 report 直连看板。

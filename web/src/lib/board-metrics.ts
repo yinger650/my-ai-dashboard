@@ -21,6 +21,8 @@ const LABEL_BY_KEY: Record<string, string> = {
   gpu_memory: "显存",
   gpu_mem_util: "显存",
   vram: "显存",
+  data_dir: "目录占用",
+  data_dir_pct: "目录占用",
 };
 
 const PERCENT_HINT = /percent|pct|util|gpu|vram|显存|利用率|占用/i;

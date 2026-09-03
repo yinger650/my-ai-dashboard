@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"agentboard/internal/client/cfgui"
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/runner"
 	"agentboard/internal/client/spool"
 	"agentboard/internal/client/update"
+	"agentboard/internal/client/wrap"
 )
 
 var (
@@ -29,34 +31,62 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "run":
-		cfgPath := ""
-		args := os.Args[2:]
-		for i := 0; i < len(args); i++ {
-			switch args[i] {
-			case "--config", "-c":
-				if i+1 >= len(args) {
-					fmt.Fprintln(os.Stderr, "--config requires a path")
-					os.Exit(2)
-				}
-				i++
-				cfgPath = args[i]
-			case "-h", "--help":
-				usage()
-				os.Exit(0)
-			default:
-				fmt.Fprintf(os.Stderr, "unknown flag %q\n", args[i])
-				usage()
-				os.Exit(2)
-			}
-		}
-		if cfgPath == "" {
-			fmt.Fprintln(os.Stderr, "board-client run requires --config")
+		cfgPath, err := requireConfig(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			usage()
 			os.Exit(2)
 		}
 		if err := runClient(cfgPath); err != nil {
 			fmt.Fprintf(os.Stderr, "board-client: %v\n", err)
 			os.Exit(1)
+		}
+	case "wrap":
+		opt, argv, err := wrap.ParseArgs(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		code, err := wrap.Run(opt, argv)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "board-client wrap: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
+		}
+		os.Exit(code)
+	case "config":
+		if len(os.Args) < 3 {
+			usage()
+			os.Exit(2)
+		}
+		switch os.Args[2] {
+		case "tui":
+			cfgPath, err := requireConfig(os.Args[3:])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+			if err := cfgui.RunTUI(cfgPath, os.Stdin, os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "board-client config tui: %v\n", err)
+				os.Exit(1)
+			}
+		case "web":
+			cfgPath, listen, err := parseWebArgs(os.Args[3:])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+			if err := cfgui.RunWeb(ctx, cfgPath, listen); err != nil {
+				fmt.Fprintf(os.Stderr, "board-client config web: %v\n", err)
+				os.Exit(1)
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "unknown config command %q\n", os.Args[2])
+			usage()
+			os.Exit(2)
 		}
 	case "print-example-config":
 		os.Stdout.WriteString(exampleConfig)
@@ -76,12 +106,69 @@ func usage() {
 
 Usage:
   board-client run --config client.yaml
+  board-client wrap --summary TEXT [--ttl 6h] [--log PATH] [--config client.yaml] -- CMD...
+  board-client config tui --config client.yaml
+  board-client config web --config client.yaml [--listen 127.0.0.1:7439]
   board-client print-example-config
   board-client version
 
-The machine token is read from the environment variable named in the config
-(default ABP_MACHINE_TOKEN), never from the YAML file.
+Token: non-empty $ABP_MACHINE_TOKEN overrides server.machine_token in YAML.
+status_probe scripts are compiled locally; the board never sends commands.
+wrap and agentboard-report are mutually exclusive for the same task.
 `, version)
+}
+
+func requireConfig(args []string) (string, error) {
+	path, _, err := parseConfigFlags(args)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", fmt.Errorf("--config is required")
+	}
+	return path, nil
+}
+
+func parseWebArgs(args []string) (cfgPath, listen string, err error) {
+	listen = "127.0.0.1:7439"
+	cfgPath, rest, err := parseConfigFlags(args)
+	if err != nil {
+		return "", "", err
+	}
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case "--listen":
+			if i+1 >= len(rest) {
+				return "", "", fmt.Errorf("--listen requires a value")
+			}
+			i++
+			listen = rest[i]
+		default:
+			return "", "", fmt.Errorf("unknown flag %q", rest[i])
+		}
+	}
+	if cfgPath == "" {
+		return "", "", fmt.Errorf("--config is required")
+	}
+	return cfgPath, listen, nil
+}
+
+func parseConfigFlags(args []string) (cfgPath string, rest []string, err error) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--config", "-c":
+			if i+1 >= len(args) {
+				return "", nil, fmt.Errorf("--config requires a path")
+			}
+			i++
+			cfgPath = args[i]
+		case "-h", "--help":
+			return "", nil, fmt.Errorf("help")
+		default:
+			rest = append(rest, args[i])
+		}
+	}
+	return cfgPath, rest, nil
 }
 
 func runClient(cfgPath string) error {
@@ -101,6 +188,7 @@ func runClient(cfgPath string) error {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	r := runner.New(cfg, sp, log)
 	r.Build = update.Info{Version: version, Commit: commit}
+	r.SetConfigPath(cfgPath)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -123,7 +211,7 @@ const exampleConfig = `version: 1
 
 server:
   url: "http://127.0.0.1:8080"
-  # The machine token is read from this environment variable, never from the file.
+  machine_token: "abp_m_REPLACE_ME"
   machine_token_env: "ABP_MACHINE_TOKEN"
   timeout: 20s
   tls_insecure_skip_verify: false
@@ -131,6 +219,13 @@ server:
 machine:
   key: "home-server"
   display_name: "家庭服务器"
+  status_probes:
+    - key: gpu
+      intent: "NVIDIA GPU 利用率 0-100"
+    - key: data_dir
+      intent: "/data 占用百分比"
+      path: /data
+      interval: 60s
 
 storage:
   spool_path: "/var/lib/agentboard-client/spool.db"
