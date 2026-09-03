@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,8 +85,9 @@ h2{margin-top:1.6rem;font-size:1.1rem;color:#9db4ff}
 			b.WriteString(`<div class="sub"><label><input type="checkbox" name="sub.` + escape(f.ID) + `" value="` + escape(s.ID) + `"` + sc + `> ` + escape(s.Title) + sb + `</label></div>`)
 		}
 	}
-	b.WriteString(`<h2>自定义 · status_probes</h2>
-<table><tr><th>key</th><th>intent</th><th>path</th><th>interval</th></tr>`)
+	b.WriteString(`<h2>自然语言扩展</h2>
+<p>类型：metric 写入机器指标；service 创建虚拟服务；http 复用 HTTP 健康检查。自然语言编译需要启用 AI，并在本机设置 CURSOR_API_KEY。</p>
+<table><tr><th>key</th><th>类型</th><th>名称</th><th>自然语言描述</th><th>path</th><th>interval</th><th>TTL</th></tr>`)
 	rows := m.Probes
 	for len(rows) < 4 {
 		rows = append(rows, config.StatusProbe{})
@@ -93,9 +95,12 @@ h2{margin-top:1.6rem;font-size:1.1rem;color:#9db4ff}
 	for _, p := range rows {
 		b.WriteString(`<tr>
 <td><input type="text" name="probe_key" value="` + escape(p.Key) + `"></td>
+<td><select name="probe_kind">` + kindOptions(p.Kind) + `</select></td>
+<td><input type="text" name="probe_name" value="` + escape(p.Name) + `"></td>
 <td><input type="text" name="probe_intent" value="` + escape(p.Intent) + `"></td>
 <td><input type="text" name="probe_path" value="` + escape(p.Path) + `"></td>
 <td><input type="text" name="probe_interval" value="` + escape(config.FormatDuration(p.Interval)) + `"></td>
+<td><input type="number" min="0" name="probe_ttl" value="` + formatInt(p.TTLSeconds) + `"></td>
 </tr>`)
 	}
 	b.WriteString(`</table>
@@ -216,9 +221,12 @@ func newMux(cfgPath string) http.Handler {
 
 func parseProbeForm(r *http.Request) []config.StatusProbe {
 	keys := r.Form["probe_key"]
+	kinds := r.Form["probe_kind"]
+	names := r.Form["probe_name"]
 	intents := r.Form["probe_intent"]
 	paths := r.Form["probe_path"]
 	intervals := r.Form["probe_interval"]
+	ttls := r.Form["probe_ttl"]
 	var out []config.StatusProbe
 	for i, k := range keys {
 		k = strings.TrimSpace(k)
@@ -226,6 +234,12 @@ func parseProbeForm(r *http.Request) []config.StatusProbe {
 			continue
 		}
 		p := config.StatusProbe{Key: k}
+		if i < len(kinds) {
+			p.Kind = strings.TrimSpace(kinds[i])
+		}
+		if i < len(names) {
+			p.Name = strings.TrimSpace(names[i])
+		}
 		if i < len(intents) {
 			p.Intent = strings.TrimSpace(intents[i])
 		}
@@ -238,9 +252,34 @@ func parseProbeForm(r *http.Request) []config.StatusProbe {
 				p.Interval.Duration = d
 			}
 		}
+		if i < len(ttls) {
+			p.TTLSeconds, _ = strconv.Atoi(strings.TrimSpace(ttls[i]))
+		}
 		out = append(out, p)
 	}
 	return out
+}
+
+func kindOptions(selected string) string {
+	if selected == "" {
+		selected = config.StatusProbeMetric
+	}
+	var b strings.Builder
+	for _, kind := range []string{config.StatusProbeMetric, config.StatusProbeService, config.StatusProbeHTTP} {
+		sel := ""
+		if selected == kind {
+			sel = ` selected`
+		}
+		b.WriteString(`<option value="` + kind + `"` + sel + `>` + kind + `</option>`)
+	}
+	return b.String()
+}
+
+func formatInt(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return strconv.Itoa(n)
 }
 
 func parseHTTPForm(r *http.Request) []config.HTTPTarget {

@@ -1,6 +1,7 @@
 package cfgui
 
 import (
+	"bufio"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/spool"
@@ -163,7 +165,8 @@ collectors:
 		t.Fatal(err)
 	}
 	body, _ := readAll(resp)
-	if !strings.Contains(body, "AI 主机巡检") || !strings.Contains(body, `name="feat"`) {
+	if !strings.Contains(body, "AI 主机巡检") || !strings.Contains(body, `name="feat"`) ||
+		!strings.Contains(body, `name="probe_kind"`) || !strings.Contains(body, "CURSOR_API_KEY") {
 		t.Fatalf("page=%s", body)
 	}
 	form := url.Values{}
@@ -173,9 +176,12 @@ collectors:
 	form.Add("feat", "ai.discover")
 	form.Add("sub.ai.discover", "unit_status")
 	form.Add("probe_key", "gpu")
+	form.Add("probe_kind", "service")
+	form.Add("probe_name", "GPU 服务")
 	form.Add("probe_intent", "util")
 	form.Add("probe_path", "")
 	form.Add("probe_interval", "")
+	form.Add("probe_ttl", "240")
 	resp, err = http.PostForm(ts.URL+"/save", form)
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +191,8 @@ collectors:
 	}
 	raw, _ := os.ReadFile(p)
 	text := string(raw)
-	if !strings.Contains(text, "key: gpu") {
+	if !strings.Contains(text, "key: gpu") || !strings.Contains(text, "kind: service") ||
+		!strings.Contains(text, "name: GPU 服务") || !strings.Contains(text, "ttl_seconds: 240") {
 		t.Fatalf("custom probe lost:\n%s", text)
 	}
 	if !strings.Contains(text, "enabled: true") || !strings.Contains(text, "unit_status") {
@@ -193,6 +200,26 @@ collectors:
 	}
 	if strings.Contains(text, "filesystems:") {
 		t.Fatalf("unrelated collector leaked:\n%s", text)
+	}
+}
+
+func TestTUIAddsNaturalLanguageHTTPProbe(t *testing.T) {
+	m := &Model{}
+	in := strings.NewReader("a\nlocal-health\nhttp\n本机健康\n检查 http://127.0.0.1:18080/health\n\n30s\n180\n")
+	var out strings.Builder
+	if err := editProbes(m, bufio.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Probes) != 1 {
+		t.Fatalf("probes=%+v output=%s", m.Probes, out.String())
+	}
+	p := m.Probes[0]
+	if p.Key != "local-health" || p.Kind != config.StatusProbeHTTP || p.Name != "本机健康" ||
+		p.Interval.Duration != 30*time.Second || p.TTLSeconds != 180 {
+		t.Fatalf("probe=%+v", p)
+	}
+	if !strings.Contains(out.String(), "CURSOR_API_KEY") {
+		t.Fatalf("missing key hint: %s", out.String())
 	}
 }
 

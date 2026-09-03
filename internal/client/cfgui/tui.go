@@ -108,7 +108,7 @@ func printTUI(out io.Writer, m *Model) []menuItem {
 		}
 	}
 	fmt.Fprintln(out, "自定义（保留）")
-	add("custom", "probes", "", fmt.Sprintf("status_probes     %d 条", len(m.Probes)))
+	add("custom", "probes", "", fmt.Sprintf("自然语言扩展      %d 条", len(m.Probes)))
 	add("custom", "http", "", fmt.Sprintf("http.targets      %d 条", len(m.HTTP)))
 	add("custom", "scripts", "", fmt.Sprintf("probes.scripts    %d 条", len(m.Scripts)))
 	return items
@@ -231,9 +231,15 @@ func editCustom(m *Model, which string, br *bufio.Reader, out io.Writer) error {
 }
 
 func editProbes(m *Model, br *bufio.Reader, out io.Writer) error {
+	fmt.Fprintln(out, "metric=机器指标  service=虚拟服务  http=HTTP 健康检查")
+	fmt.Fprintln(out, "自然语言编译需要 ai.enabled=true，并在本机设置 CURSOR_API_KEY")
 	fmt.Fprintln(out, "a 添加  d <n> 删除  回车返回")
 	for i, p := range m.Probes {
-		fmt.Fprintf(out, "  [%d] %s  intent=%q path=%s\n", i, p.Key, p.Intent, p.Path)
+		kind := p.Kind
+		if kind == "" {
+			kind = config.StatusProbeMetric
+		}
+		fmt.Fprintf(out, "  [%d] %s  kind=%s name=%q intent=%q path=%s\n", i, p.Key, kind, p.Name, p.Intent, p.Path)
 	}
 	fmt.Fprintf(out, "> ")
 	line, err := br.ReadString('\n')
@@ -245,10 +251,16 @@ func editProbes(m *Model, br *bufio.Reader, out io.Writer) error {
 	case line == "":
 		return nil
 	case line == "a":
-		p := config.StatusProbe{}
+		p := config.StatusProbe{Kind: config.StatusProbeMetric}
 		fmt.Fprintf(out, "key: ")
 		p.Key, _ = readTrim(br)
-		fmt.Fprintf(out, "intent: ")
+		fmt.Fprintf(out, "kind (metric/service/http，空=metric): ")
+		if kind, _ := readTrim(br); kind != "" {
+			p.Kind = kind
+		}
+		fmt.Fprintf(out, "name (空=key): ")
+		p.Name, _ = readTrim(br)
+		fmt.Fprintf(out, "自然语言描述: ")
 		p.Intent, _ = readTrim(br)
 		fmt.Fprintf(out, "path (可选): ")
 		p.Path, _ = readTrim(br)
@@ -261,6 +273,16 @@ func editProbes(m *Model, br *bufio.Reader, out io.Writer) error {
 				return nil
 			}
 			p.Interval.Duration = d
+		}
+		fmt.Fprintf(out, "ttl_seconds (service/http 可选，空=180): ")
+		raw, _ = readTrim(br)
+		if raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 {
+				fmt.Fprintln(out, "ttl_seconds 无效")
+				return nil
+			}
+			p.TTLSeconds = n
 		}
 		m.Probes = append(m.Probes, p)
 	case strings.HasPrefix(line, "d"):
