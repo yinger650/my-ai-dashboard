@@ -230,7 +230,7 @@ type AIDiscover struct {
 type AllowCmd struct {
 	ID         string   `yaml:"id"`
 	Argv       []string `yaml:"argv"`
-	AllowPaths []string `yaml:"allow_paths"`
+	AllowPaths []string `yaml:"allow_paths,omitempty"`
 }
 
 var machineKeyRe = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
