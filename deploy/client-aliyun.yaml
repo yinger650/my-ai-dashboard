@@ -88,16 +88,7 @@ collectors:
         url: "https://board.yinger650.com/health/live"
         method: GET
         expect_status: [200]
-      - service_key: site-yinger650
-        name: yinger650.com
-        url: "https://yinger650.com/"
-        method: GET
-        expect_status: [200]
-      - service_key: site-yinger650-www
-        name: www.yinger650.com
-        url: "https://www.yinger650.com/"
-        method: GET
-        expect_status: [200]
+      # yinger650.com / www 不是必须探测，默认不配。需要时再追加 target。
       # 继续追加站点：
       # - service_key: site-example
       #   name: 示例站
