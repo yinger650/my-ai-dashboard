@@ -375,3 +375,94 @@ storage:
 		t.Fatalf("types=%v", types)
 	}
 }
+
+func TestMaybeNotifyNewFeatures(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ABP_MACHINE_TOKEN", "abp_m_test")
+	cfgPath := filepath.Join(dir, "client.yaml")
+	yaml := `version: 1
+server:
+  url: "http://127.0.0.1:9"
+machine:
+  key: "home-server"
+storage:
+  spool_path: "` + filepath.Join(dir, "spool.db") + `"
+collectors:
+  cpu: true
+  memory: true
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, err := spool.Open(cfg.Storage.SpoolPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sp.Close() })
+	r := New(cfg, sp, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	r.SetConfigPath(cfgPath)
+	r.Build.Version = "0.1.11"
+	r.maybeNotifyNewFeatures()
+
+	raw, ok, err := sp.GetState(config.SeenFeaturesKey)
+	if err != nil || !ok {
+		t.Fatalf("baseline seen missing ok=%v err=%v", ok, err)
+	}
+	seen := config.ParseSeenIDs(raw)
+	if !containsID(seen, "cpu") || containsID(seen, "ai.discover") {
+		t.Fatalf("baseline=%v", seen)
+	}
+
+	batch, err := sp.Batch(50, 256*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log, status bool
+	for _, q := range batch {
+		var env event.Envelope
+		_ = json.Unmarshal([]byte(q.Payload), &env)
+		if env.EventType == event.TypeLogAppend && env.ServiceKey == "board-client" && strings.Contains(string(env.Payload), "AI 主机巡检") {
+			log = true
+			if !strings.Contains(string(env.Payload), "config tui") {
+				t.Fatalf("log missing command: %s", env.Payload)
+			}
+		}
+		if env.EventType == event.TypeStatusUpsert && strings.Contains(string(env.Payload), "config_new_features") {
+			status = true
+		}
+	}
+	if !log || !status {
+		t.Fatalf("log=%v status=%v n=%d", log, status, len(batch))
+	}
+
+	if err := sp.SetState(config.SeenFeaturesKey, config.EncodeSeenIDs(config.AllCatalogIDs())); err != nil {
+		t.Fatal(err)
+	}
+	r2 := New(cfg, sp, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	r2.maybeNotifyNewFeatures()
+	batch2, _ := sp.Batch(50, 256*1024)
+	var extra int
+	for _, q := range batch2 {
+		var env event.Envelope
+		_ = json.Unmarshal([]byte(q.Payload), &env)
+		if env.EventType == event.TypeLogAppend && strings.Contains(string(env.Payload), "有新功能可配置") {
+			extra++
+		}
+	}
+	if extra != 1 {
+		t.Fatalf("expected one notice log, got %d", extra)
+	}
+}
+
+func containsID(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
+}

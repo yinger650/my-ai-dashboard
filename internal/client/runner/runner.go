@@ -231,6 +231,45 @@ func (r *Runner) emitSelfLog(markdown, severity string) {
 	r.enqueue(event.TypeLogAppend, selfServiceKey, "", event.LogPayload{Markdown: markdown, Severity: severity, Source: "board-client"})
 }
 
+func (r *Runner) maybeNotifyNewFeatures() {
+	if r.sp == nil || r.cfg == nil {
+		return
+	}
+	raw, _, _ := r.sp.GetState(config.SeenFeaturesKey)
+	seen := config.ParseSeenIDs(raw)
+	if len(seen) == 0 {
+		seen = config.PresentIDs(r.cfg)
+		_ = r.sp.SetState(config.SeenFeaturesKey, config.EncodeSeenIDs(seen))
+	}
+	unseen := config.UnseenIDs(seen)
+	n := len(unseen)
+	val, _ := json.Marshal(n)
+	r.enqueue(event.TypeStatusUpsert, selfServiceKey, "", event.StatusUpsert{
+		Items: []event.StatusItem{{
+			Key: "config_new_features", Label: "待配置功能", Value: val,
+			ValueType: "number", Severity: "info", DisplayFormat: "number", SortOrder: 30,
+		}},
+	})
+	if n == 0 {
+		return
+	}
+	titles := config.UnseenTitles(seen)
+	if len(titles) == 0 {
+		return
+	}
+	cfgPath := r.cfgPath
+	if cfgPath == "" {
+		cfgPath = "/etc/agentboard/client.yaml"
+	}
+	ver := strings.TrimSpace(r.Build.Version)
+	if ver == "" {
+		ver = "dev"
+	}
+	msg := "board-client " + ver + " 有新功能可配置：" + strings.Join(titles, "、") +
+		"。本机运行：\n`board-client config tui --config " + cfgPath + "`\n`board-client config web --config " + cfgPath + "`"
+	r.emitSelfLog(msg, "info")
+}
+
 func (r *Runner) saveInspectState() {
 	if r.statePath == "" || r.proj == nil {
 		return
@@ -276,6 +315,7 @@ func (r *Runner) Run(ctx context.Context) {
 	r.loadInspectState()
 	r.CollectOnce()
 	r.emitSelfLog("board-client 启动，开始采集系统快照。", "info")
+	r.maybeNotifyNewFeatures()
 
 	var wg sync.WaitGroup
 	go r.compileStatusProbes(ctx)
