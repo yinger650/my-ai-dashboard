@@ -163,15 +163,24 @@ type ProbesCollector struct {
 	Scripts []ProbeScript `yaml:"scripts"`
 }
 
-// StatusProbe is a machine-level extra (GPU, directory usage, …) compiled
-// into a side-path script. Distinct from collectors.probes virtual services.
+const (
+	StatusProbeMetric  = "metric"
+	StatusProbeService = "service"
+	StatusProbeHTTP    = "http"
+)
+
+// StatusProbe is a natural-language extension compiled locally. Metric probes
+// enrich the machine heartbeat; service and HTTP probes create virtual services.
 type StatusProbe struct {
-	Key      string   `yaml:"key"`
-	Intent   string   `yaml:"intent"`
-	Path     string   `yaml:"path,omitempty"`
-	Command  []string `yaml:"command,omitempty"`
-	Interval Duration `yaml:"interval"`
-	Timeout  Duration `yaml:"timeout"`
+	Key        string   `yaml:"key"`
+	Kind       string   `yaml:"kind,omitempty"`
+	Name       string   `yaml:"name,omitempty"`
+	Intent     string   `yaml:"intent"`
+	Path       string   `yaml:"path,omitempty"`
+	Command    []string `yaml:"command,omitempty"`
+	Interval   Duration `yaml:"interval"`
+	Timeout    Duration `yaml:"timeout"`
+	TTLSeconds int      `yaml:"ttl_seconds,omitempty"`
 }
 
 // ProbeScript is one local probe.
@@ -367,11 +376,22 @@ func (c *Config) applyDefaults() {
 	}
 	for i := range c.Machine.StatusProbes {
 		s := &c.Machine.StatusProbes[i]
+		if s.Kind == "" {
+			s.Kind = StatusProbeMetric
+		} else {
+			s.Kind = strings.ToLower(strings.TrimSpace(s.Kind))
+		}
+		if s.Name == "" {
+			s.Name = s.Key
+		}
 		if s.Interval.Duration == 0 {
 			s.Interval = c.Intervals.Probe
 		}
 		if s.Timeout.Duration == 0 {
 			s.Timeout.Duration = 15 * time.Second
+		}
+		if s.Kind != StatusProbeMetric && s.TTLSeconds == 0 {
+			s.TTLSeconds = 180
 		}
 	}
 	for i := range c.Collectors.Probes.Scripts {
@@ -653,6 +673,15 @@ func (c *Config) validateStatusProbes() error {
 			return fmt.Errorf("machine.status_probes[%d].key %q is duplicated", i, s.Key)
 		}
 		seen[s.Key] = struct{}{}
+		switch s.Kind {
+		case StatusProbeMetric, StatusProbeService:
+		case StatusProbeHTTP:
+			if len(s.Command) > 0 {
+				return fmt.Errorf("machine.status_probes[%d].command is not supported for kind=http", i)
+			}
+		default:
+			return fmt.Errorf("machine.status_probes[%d].kind must be metric, service or http", i)
+		}
 		if strings.TrimSpace(s.Intent) == "" && len(s.Command) == 0 {
 			return fmt.Errorf("machine.status_probes[%d] needs intent or command", i)
 		}
@@ -661,6 +690,9 @@ func (c *Config) validateStatusProbes() error {
 		}
 		if s.Path != "" && !filepath.IsAbs(s.Path) {
 			return fmt.Errorf("machine.status_probes[%d].path must be absolute", i)
+		}
+		if s.TTLSeconds < 0 {
+			return fmt.Errorf("machine.status_probes[%d].ttl_seconds must not be negative", i)
 		}
 	}
 	return nil
