@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"agentboard/internal/client/aiprovider"
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/spool"
 )
@@ -26,6 +27,11 @@ type Model struct {
 	TouchP       bool
 	TouchH       bool
 	TouchS       bool
+	ExtRoot      string
+	LegacyDir    string
+	AIEnabled    bool
+	Provider     aiprovider.Provider
+	Previews     map[string]string
 	origEn       map[string]bool
 	origSub      map[string]map[string]bool
 	origURL      string
@@ -40,18 +46,20 @@ func loadModel(path string) (*Model, error) {
 		return nil, err
 	}
 	m := &Model{
-		Path:    path,
-		NewFile: missing,
-		Enabled: map[string]bool{},
-		Subs:    map[string]map[string]bool{},
-		Unseen:  map[string]bool{},
-		origEn:  map[string]bool{},
-		origSub: map[string]map[string]bool{},
+		Path:     path,
+		NewFile:  missing,
+		Enabled:  map[string]bool{},
+		Subs:     map[string]map[string]bool{},
+		Unseen:   map[string]bool{},
+		origEn:   map[string]bool{},
+		origSub:  map[string]map[string]bool{},
+		Previews: map[string]string{},
 	}
 	if missing {
 		m.URL = "https://board.yinger650.com"
 		m.Key = "home-server"
 		m.origURL, m.origKey = "", ""
+		m.attachExt(nil, "")
 		for _, f := range config.Catalog() {
 			m.Enabled[f.ID] = f.DefaultOn
 			m.origEn[f.ID] = false
@@ -75,6 +83,7 @@ func loadModel(path string) (*Model, error) {
 	m.HTTP = append([]config.HTTPTarget(nil), cfg.Collectors.HTTP.Targets...)
 	m.Scripts = append([]config.ProbeScript(nil), cfg.Collectors.Probes.Scripts...)
 	root := config.DocRoot(doc)
+	m.attachExt(cfg, config.SpoolPathFromDoc(root))
 	for _, f := range config.Catalog() {
 		on := config.FeatureEnabled(root, f)
 		m.Enabled[f.ID] = on
@@ -125,6 +134,7 @@ func (m *Model) edit() config.Edit {
 		}
 		subs[parent] = cp
 	}
+	m.syncBuiltProbes()
 	ed := config.Edit{
 		StatusProbes: m.Probes,
 		HTTPTargets:  m.HTTP,
@@ -148,6 +158,25 @@ func (m *Model) edit() config.Edit {
 		ed.Token = strings.TrimSpace(m.Token)
 	}
 	return ed
+}
+
+func (m *Model) syncBuiltProbes() {
+	for i := range m.Probes {
+		p := &m.Probes[i]
+		if !m.probeBuilt(*p) {
+			continue
+		}
+		if strings.TrimSpace(p.Dir) == "" {
+			p.Dir = config.NLRelDir(p.Key)
+		}
+		if p.Kind == config.StatusProbeHTTP || len(p.Command) > 0 {
+			continue
+		}
+		script := filepath.Join(m.ExtRoot, config.NLRelDir(p.Key), "probe.sh")
+		if _, err := os.Stat(script); err == nil {
+			p.Command = []string{script}
+		}
+	}
 }
 
 func readSeen(spoolPath string) string {

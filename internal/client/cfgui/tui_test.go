@@ -2,6 +2,7 @@ package cfgui
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"agentboard/internal/client/aiprovider"
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/spool"
 )
@@ -166,7 +168,8 @@ collectors:
 	}
 	body, _ := readAll(resp)
 	if !strings.Contains(body, "AI 主机巡检") || !strings.Contains(body, `name="feat"`) ||
-		!strings.Contains(body, `name="probe_kind"`) || !strings.Contains(body, "CURSOR_API_KEY") {
+		!strings.Contains(body, `name="probe_kind"`) || !strings.Contains(body, "CURSOR_API_KEY") ||
+		!strings.Contains(body, "<details") || !strings.Contains(body, "Build 并预览") {
 		t.Fatalf("page=%s", body)
 	}
 	form := url.Values{}
@@ -176,12 +179,17 @@ collectors:
 	form.Add("feat", "ai.discover")
 	form.Add("sub.ai.discover", "unit_status")
 	form.Add("probe_key", "gpu")
+	form.Add("probe_key_edit", "gpu")
 	form.Add("probe_kind", "service")
 	form.Add("probe_name", "GPU 服务")
 	form.Add("probe_intent", "util")
 	form.Add("probe_path", "")
 	form.Add("probe_interval", "")
 	form.Add("probe_ttl", "240")
+	form.Add("probe_dir", "")
+	form.Add("probe_command", "")
+	form.Add("probe_history", "")
+	form.Add("probe_extra", "")
 	resp, err = http.PostForm(ts.URL+"/save", form)
 	if err != nil {
 		t.Fatal(err)
@@ -200,6 +208,13 @@ collectors:
 	}
 	if strings.Contains(text, "filesystems:") {
 		t.Fatalf("unrelated collector leaked:\n%s", text)
+	}
+	loaded, err := config.Read(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Machine.StatusProbes) != 1 || loaded.Machine.StatusProbes[0].Enabled != nil {
+		t.Fatalf("unbuilt existing probe should keep enabled unset: %+v", loaded.Machine.StatusProbes)
 	}
 }
 
@@ -221,6 +236,116 @@ func TestTUIAddsNaturalLanguageHTTPProbe(t *testing.T) {
 	if !strings.Contains(out.String(), "CURSOR_API_KEY") {
 		t.Fatalf("missing key hint: %s", out.String())
 	}
+	if p.IsEnabled() {
+		t.Fatal("new probe should start disabled")
+	}
+}
+
+func TestTUIExpandBuildPreviewEnable(t *testing.T) {
+	dir := t.TempDir()
+	m := &Model{
+		ExtRoot:   filepath.Join(dir, "extensions"),
+		LegacyDir: filepath.Join(dir, "probes"),
+		Previews:  map[string]string{},
+		Provider:  &stubAI{text: "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"running\",\"summary\":\"ok\",\"severity\":\"normal\",\"statuses\":[{\"key\":\"gpu_util\",\"value\":\"41\"}]}'\n"},
+	}
+	m.Probes = []config.StatusProbe{{
+		Key: "gpu", Kind: config.StatusProbeMetric, Intent: "NVIDIA GPU", Enabled: config.BoolPtr(false),
+	}}
+	in := strings.NewReader("0\nb\ne\n\n\n")
+	var out strings.Builder
+	if err := editProbes(m, bufio.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "Build 完成") || !strings.Contains(text, "gpu_util") {
+		t.Fatalf("preview missing:\n%s", text)
+	}
+	if !m.probeBuilt(m.Probes[0]) {
+		t.Fatal("expected artifact")
+	}
+	if !m.Probes[0].IsEnabled() {
+		t.Fatal("enable after build")
+	}
+	if m.Probes[0].Dir != "nl/gpu" {
+		t.Fatalf("dir=%s", m.Probes[0].Dir)
+	}
+}
+
+func TestWebBuildWritesPreview(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	if err := os.WriteFile(p, []byte(`version: 1
+server:
+  url: "https://board.yinger650.com"
+  machine_token: "abp_m_x"
+machine:
+  key: "home-server"
+  status_probes:
+    - key: gpu
+      intent: "util"
+storage:
+  spool_path: "`+filepath.Join(dir, "spool.db")+`"
+ai:
+  enabled: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"running\",\"summary\":\"ok\",\"severity\":\"normal\",\"statuses\":[{\"key\":\"gpu_util\",\"value\":\"41\"}]}'\n"
+	ts := httptest.NewServer(newWeb(p, &stubAI{text: script}))
+	defer ts.Close()
+	form := url.Values{}
+	form.Set("url", "https://board.yinger650.com")
+	form.Set("key", "home-server")
+	form.Add("feat", "cpu")
+	form.Add("probe_key", "gpu")
+	form.Add("probe_key_edit", "gpu")
+	form.Add("probe_kind", "metric")
+	form.Add("probe_name", "gpu")
+	form.Add("probe_intent", "util")
+	form.Add("probe_path", "")
+	form.Add("probe_interval", "")
+	form.Add("probe_ttl", "")
+	form.Add("probe_dir", "")
+	form.Add("probe_command", "")
+	form.Add("probe_history", "")
+	form.Add("probe_extra", "")
+	form.Set("probe_index", "0")
+	resp, err := http.PostForm(ts.URL+"/build", form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := mustRead(resp)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "Build 完成") || !strings.Contains(body, "gpu_util") {
+		t.Fatalf("page=%s", body)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "extensions", "nl", "gpu", "probe.sh")); err != nil {
+		t.Fatal(err)
+	}
+	form.Add("probe_enable", "gpu")
+	form.Add("probe_dir", "nl/gpu")
+	resp, err = http.PostForm(ts.URL+"/save", form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("save %d %s", resp.StatusCode, mustRead(resp))
+	}
+	raw, _ := os.ReadFile(p)
+	text := string(raw)
+	if !strings.Contains(text, "dir: nl/gpu") || !strings.Contains(text, "intent: util") {
+		t.Fatalf("yaml:\n%s", text)
+	}
+}
+
+type stubAI struct{ text string }
+
+func (s *stubAI) Name() string { return "stub" }
+func (s *stubAI) Run(_ context.Context, _ aiprovider.Request) (aiprovider.Result, error) {
+	return aiprovider.Result{Text: s.text}, nil
 }
 
 func readAll(resp *http.Response) (string, error) {

@@ -108,9 +108,9 @@ func printTUI(out io.Writer, m *Model) []menuItem {
 		}
 	}
 	fmt.Fprintln(out, "自定义（保留）")
-	add("custom", "probes", "", fmt.Sprintf("自然语言扩展      %d 条", len(m.Probes)))
+	add("custom", "probes", "", fmt.Sprintf("自然语言扩展      %d 条（展开后 Build / 预览）", len(m.Probes)))
 	add("custom", "http", "", fmt.Sprintf("http.targets      %d 条", len(m.HTTP)))
-	add("custom", "scripts", "", fmt.Sprintf("probes.scripts    %d 条", len(m.Scripts)))
+	add("custom", "scripts", "", fmt.Sprintf("probes.scripts    %d 条（自定义目录 extensions/custom）", len(m.Scripts)))
 	return items
 }
 
@@ -231,72 +231,11 @@ func editCustom(m *Model, which string, br *bufio.Reader, out io.Writer) error {
 }
 
 func editProbes(m *Model, br *bufio.Reader, out io.Writer) error {
-	fmt.Fprintln(out, "metric=机器指标  service=虚拟服务  http=HTTP 健康检查")
-	fmt.Fprintln(out, "自然语言编译需要 ai.enabled=true，并在本机设置 CURSOR_API_KEY")
-	fmt.Fprintln(out, "a 添加  d <n> 删除  回车返回")
-	for i, p := range m.Probes {
-		kind := p.Kind
-		if kind == "" {
-			kind = config.StatusProbeMetric
-		}
-		fmt.Fprintf(out, "  [%d] %s  kind=%s name=%q intent=%q path=%s\n", i, p.Key, kind, p.Name, p.Intent, p.Path)
-	}
-	fmt.Fprintf(out, "> ")
-	line, err := br.ReadString('\n')
-	if err != nil && line == "" {
-		return err
-	}
-	line = strings.TrimSpace(line)
-	switch {
-	case line == "":
-		return nil
-	case line == "a":
-		p := config.StatusProbe{Kind: config.StatusProbeMetric}
-		fmt.Fprintf(out, "key: ")
-		p.Key, _ = readTrim(br)
-		fmt.Fprintf(out, "kind (metric/service/http，空=metric): ")
-		if kind, _ := readTrim(br); kind != "" {
-			p.Kind = kind
-		}
-		fmt.Fprintf(out, "name (空=key): ")
-		p.Name, _ = readTrim(br)
-		fmt.Fprintf(out, "自然语言描述: ")
-		p.Intent, _ = readTrim(br)
-		fmt.Fprintf(out, "path (可选): ")
-		p.Path, _ = readTrim(br)
-		fmt.Fprintf(out, "interval (如 60s, 空=默认): ")
-		raw, _ := readTrim(br)
-		if raw != "" {
-			d, err := time.ParseDuration(raw)
-			if err != nil {
-				fmt.Fprintf(out, "interval 无效: %v\n", err)
-				return nil
-			}
-			p.Interval.Duration = d
-		}
-		fmt.Fprintf(out, "ttl_seconds (service/http 可选，空=180): ")
-		raw, _ = readTrim(br)
-		if raw != "" {
-			n, err := strconv.Atoi(raw)
-			if err != nil || n < 0 {
-				fmt.Fprintln(out, "ttl_seconds 无效")
-				return nil
-			}
-			p.TTLSeconds = n
-		}
-		m.Probes = append(m.Probes, p)
-	case strings.HasPrefix(line, "d"):
-		n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "d")))
-		if n < 0 || n >= len(m.Probes) {
-			fmt.Fprintln(out, "编号无效")
-			return nil
-		}
-		m.Probes = append(m.Probes[:n], m.Probes[n+1:]...)
-	}
-	return nil
+	return runEditProbes(m, br, out)
 }
 
 func editHTTP(m *Model, br *bufio.Reader, out io.Writer) error {
+	fmt.Fprintln(out, "手写 HTTP 目标。Agent 请用 skills/board-client-extension，不要写 status_probes.intent")
 	fmt.Fprintln(out, "a 添加  d <n> 删除  回车返回")
 	for i, t := range m.HTTP {
 		fmt.Fprintf(out, "  [%d] %s  %s\n", i, t.ServiceKey, t.URL)
@@ -325,6 +264,7 @@ func editHTTP(m *Model, br *bufio.Reader, out io.Writer) error {
 }
 
 func editScripts(m *Model, br *bufio.Reader, out io.Writer) error {
+	fmt.Fprintln(out, "手写 probe 脚本，建议放 extensions/custom/<key>/probe.sh")
 	fmt.Fprintln(out, "a 添加  d <n> 删除  回车返回")
 	for i, s := range m.Scripts {
 		fmt.Fprintf(out, "  [%d] %s  %v\n", i, s.ServiceKey, s.Command)
