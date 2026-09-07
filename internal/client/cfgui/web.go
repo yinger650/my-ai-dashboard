@@ -60,7 +60,7 @@ details.probe summary{cursor:pointer;font-weight:600}
 	if errMsg != "" {
 		b.WriteString(`<p class="err">` + escape(errMsg) + `</p>`)
 	}
-	b.WriteString(`<form method="post" action="/save">
+	b.WriteString(`<form method="post" action="save">
 <h2>身份</h2>
 <label>server.url</label>
 <input type="text" name="url" value="` + escape(m.URL) + `">
@@ -107,7 +107,7 @@ details.probe summary{cursor:pointer;font-weight:600}
 	for i, p := range m.Probes {
 		b.WriteString(renderProbeCard(m, i, p, openKey))
 	}
-	b.WriteString(`<button type="submit" formaction="/add-probe" class="secondary" name="probe_action" value="add">添加一条自然语言扩展</button>
+	b.WriteString(`<button type="submit" formaction="add-probe" class="secondary" name="probe_action" value="add">添加一条自然语言扩展</button>
 <h2>自定义 · http.targets</h2>
 <p class="hint">手写 HTTP 探测。Agent 请按 skills/board-client-extension 添加，不要写 status_probes.intent。</p>
 <table><tr><th>service_key</th><th>name</th><th>url</th></tr>`)
@@ -198,8 +198,8 @@ func renderProbeCard(m *Model, i int, p config.StatusProbe, openKey string) stri
 <label><input type="checkbox" name="probe_enable" value="` + escape(p.Key) + `"` + enableChecked + enableDisabled + `> 启用（需先 Build）</label>
 <label>补充描述（追加到现有 intent）</label>
 <textarea name="probe_extra"></textarea>
-<button type="submit" formaction="/build" name="probe_index" value="` + idx + `">Build 并预览</button>
-<button type="submit" formaction="/supplement" class="secondary" name="probe_index" value="` + idx + `">追加补充</button>
+<button type="submit" formaction="build" name="probe_index" value="` + idx + `">Build 并预览</button>
+<button type="submit" formaction="supplement" class="secondary" name="probe_index" value="` + idx + `">追加补充</button>
 `)
 	if text := m.Previews[p.Key]; text != "" {
 		b.WriteString(`<div class="preview">` + escape(text) + `</div>`)

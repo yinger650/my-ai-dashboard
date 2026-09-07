@@ -169,7 +169,7 @@ collectors:
 	body, _ := readAll(resp)
 	if !strings.Contains(body, "AI 主机巡检") || !strings.Contains(body, `name="feat"`) ||
 		!strings.Contains(body, `name="probe_kind"`) || !strings.Contains(body, "CURSOR_API_KEY") ||
-		!strings.Contains(body, "<details") || !strings.Contains(body, "Build 并预览") {
+		!strings.Contains(body, "<details") || !strings.Contains(body, `formaction="build"`) {
 		t.Fatalf("page=%s", body)
 	}
 	form := url.Values{}
