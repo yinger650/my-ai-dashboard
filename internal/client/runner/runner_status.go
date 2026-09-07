@@ -26,6 +26,9 @@ func (r *Runner) compileStatusProbes(ctx context.Context) {
 	}
 	var hand, gen []config.StatusProbe
 	for _, p := range probes {
+		if !p.IsEnabled() {
+			continue
+		}
 		if len(p.Command) > 0 {
 			hand = append(hand, p)
 		} else {
@@ -33,7 +36,8 @@ func (r *Runner) compileStatusProbes(ctx context.Context) {
 		}
 	}
 	comp := &statusprobe.Compiler{
-		Dir:       r.cfg.ProbeDir(),
+		Dir:       r.cfg.ExtensionsRoot(),
+		LegacyDir: r.cfg.ProbeDir(),
 		Provider:  r.ensureProvider(),
 		AIEnabled: r.cfg.AI.Enabled,
 		Notice: func(code, md string) {

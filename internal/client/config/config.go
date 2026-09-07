@@ -51,8 +51,9 @@ type Config struct {
 		StatusProbes []StatusProbe `yaml:"status_probes,omitempty"`
 	} `yaml:"machine"`
 	Storage struct {
-		SpoolPath string `yaml:"spool_path"`
-		MaxEvents int    `yaml:"max_events"`
+		SpoolPath      string `yaml:"spool_path"`
+		ExtensionsPath string `yaml:"extensions_path,omitempty"`
+		MaxEvents      int    `yaml:"max_events"`
 	} `yaml:"storage"`
 	Intervals struct {
 		Collect     Duration `yaml:"collect"`
@@ -172,16 +173,47 @@ const (
 // StatusProbe is a natural-language extension compiled locally. Metric probes
 // enrich the machine heartbeat; service and HTTP probes create virtual services.
 type StatusProbe struct {
-	Key        string   `yaml:"key"`
-	Kind       string   `yaml:"kind,omitempty"`
-	Name       string   `yaml:"name,omitempty"`
-	Intent     string   `yaml:"intent"`
-	Path       string   `yaml:"path,omitempty"`
-	Command    []string `yaml:"command,omitempty"`
-	Interval   Duration `yaml:"interval"`
-	Timeout    Duration `yaml:"timeout"`
-	TTLSeconds int      `yaml:"ttl_seconds,omitempty"`
+	Key           string   `yaml:"key"`
+	Kind          string   `yaml:"kind,omitempty"`
+	Name          string   `yaml:"name,omitempty"`
+	Enabled       *bool    `yaml:"enabled,omitempty"`
+	Intent        string   `yaml:"intent,omitempty"`
+	IntentHistory []string `yaml:"intent_history,omitempty"`
+	Path          string   `yaml:"path,omitempty"`
+	Dir           string   `yaml:"dir,omitempty"`
+	Command       []string `yaml:"command,omitempty"`
+	Interval      Duration `yaml:"interval"`
+	Timeout       Duration `yaml:"timeout"`
+	TTLSeconds    int      `yaml:"ttl_seconds,omitempty"`
 }
+
+// IsEnabled reports whether the probe should run. Missing enabled means on.
+func (s StatusProbe) IsEnabled() bool {
+	return s.Enabled == nil || *s.Enabled
+}
+
+// Supplement appends extra intent text and records the previous description.
+func (s *StatusProbe) Supplement(extra string) {
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return
+	}
+	if cur := strings.TrimSpace(s.Intent); cur != "" {
+		s.IntentHistory = append(s.IntentHistory, cur)
+		s.Intent = cur + "\n" + extra
+		return
+	}
+	s.Intent = extra
+}
+
+// BoolPtr returns a pointer to v for YAML enabled flags.
+func BoolPtr(v bool) *bool { return &v }
+
+// NLRelDir is the extensions-relative path for a compiled NL probe.
+func NLRelDir(key string) string { return filepath.Join("nl", key) }
+
+// CustomRelDir is the extensions-relative path for a handwritten probe.
+func CustomRelDir(key string) string { return filepath.Join("custom", key) }
 
 // ProbeScript is one local probe.
 type ProbeScript struct {
@@ -392,6 +424,9 @@ func (c *Config) applyDefaults() {
 		}
 		if s.Kind != StatusProbeMetric && s.TTLSeconds == 0 {
 			s.TTLSeconds = 180
+		}
+		if s.Dir == "" && strings.TrimSpace(s.Intent) != "" {
+			s.Dir = NLRelDir(s.Key)
 		}
 	}
 	for i := range c.Collectors.Probes.Scripts {
@@ -658,9 +693,29 @@ func (c *Config) ControlSockPath() string {
 	return filepath.Join(filepath.Dir(c.Storage.SpoolPath), "control.sock")
 }
 
-// ProbeDir is where compiled status_probe scripts live.
+// ProbeDir is the legacy flat compiled-script directory (read-only fallback).
 func (c *Config) ProbeDir() string {
 	return filepath.Join(filepath.Dir(c.Storage.SpoolPath), "probes")
+}
+
+// ExtensionsRoot is the parent of nl/ (compiled) and custom/ (handwritten) probes.
+func (c *Config) ExtensionsRoot() string {
+	if strings.TrimSpace(c.Storage.ExtensionsPath) != "" {
+		return c.Storage.ExtensionsPath
+	}
+	return filepath.Join(filepath.Dir(c.Storage.SpoolPath), "extensions")
+}
+
+// ResolveProbeDir returns the on-disk directory for one status_probe.
+func (c *Config) ResolveProbeDir(p StatusProbe) string {
+	dir := strings.TrimSpace(p.Dir)
+	if dir == "" {
+		dir = NLRelDir(p.Key)
+	}
+	if filepath.IsAbs(dir) {
+		return dir
+	}
+	return filepath.Join(c.ExtensionsRoot(), dir)
 }
 
 func (c *Config) validateStatusProbes() error {

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"agentboard/internal/client/aiprovider"
+	"agentboard/internal/client/collector"
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/probe"
 )
@@ -33,14 +35,23 @@ type Ready struct {
 	TTLSeconds int
 }
 
+// Preview is the last trial-run (or HTTP compile) result shown in config UI.
+type Preview struct {
+	OK     bool   `json:"ok"`
+	Kind   string `json:"kind,omitempty"`
+	Output string `json:"output,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
 // NoticeFunc reports a collector.notice-style message.
 type NoticeFunc func(code, markdown string)
 
 type probeMeta struct {
-	Hash   string `json:"hash"`
-	Kind   string `json:"kind,omitempty"`
-	Intent string `json:"intent"`
-	Path   string `json:"path"`
+	Hash          string   `json:"hash"`
+	Kind          string   `json:"kind,omitempty"`
+	Intent        string   `json:"intent"`
+	IntentHistory []string `json:"intent_history,omitempty"`
+	Path          string   `json:"path"`
 }
 
 type httpArtifact struct {
@@ -50,22 +61,27 @@ type httpArtifact struct {
 	ExpectContains string `json:"expect_contains,omitempty"`
 }
 
-// Compiler writes and trial-runs status_probe scripts under Dir.
+// Compiler writes and trial-runs status_probe scripts under Dir/nl/<key>/.
 type Compiler struct {
-	Dir       string
+	Dir       string // extensions root (nl/ and custom/ live here)
+	LegacyDir string // old flat dirname(spool)/probes
 	Provider  aiprovider.Provider
 	AIEnabled bool
 	Notice    NoticeFunc
 }
 
-// Prepare compiles or reuses scripts. Handwritten command entries skip the model.
+// Prepare compiles or reuses scripts. Disabled probes are skipped.
+// Handwritten command entries outside nl/<key> skip the model.
 func (c *Compiler) Prepare(ctx context.Context, probes []config.StatusProbe) []Ready {
 	var out []Ready
 	for _, p := range probes {
 		if ctx.Err() != nil {
 			return out
 		}
-		ready, ok := c.prepareOne(ctx, p)
+		if !p.IsEnabled() {
+			continue
+		}
+		ready, _, ok := c.PrepareOne(ctx, p)
 		if ok {
 			out = append(out, ready)
 		}
@@ -73,7 +89,24 @@ func (c *Compiler) Prepare(ctx context.Context, probes []config.StatusProbe) []R
 	return out
 }
 
-func (c *Compiler) prepareOne(ctx context.Context, p config.StatusProbe) (Ready, bool) {
+// PrepareOne compiles one probe (even if disabled) and writes preview.json.
+func (c *Compiler) PrepareOne(ctx context.Context, p config.StatusProbe) (Ready, Preview, bool) {
+	ready, prev, ok := c.prepareOne(ctx, p)
+	if prev.Kind == "" {
+		prev.Kind = ready.Kind
+		if prev.Kind == "" {
+			if p.Kind == "" {
+				prev.Kind = config.StatusProbeMetric
+			} else {
+				prev.Kind = p.Kind
+			}
+		}
+	}
+	c.writePreview(p.Key, prev)
+	return ready, prev, ok
+}
+
+func (c *Compiler) prepareOne(ctx context.Context, p config.StatusProbe) (Ready, Preview, bool) {
 	if p.Kind == "" {
 		p.Kind = config.StatusProbeMetric
 	}
@@ -95,82 +128,117 @@ func (c *Compiler) prepareOne(ctx context.Context, p config.StatusProbe) (Ready,
 		Key: p.Key, Kind: p.Kind, Name: p.Name,
 		Interval: interval, Timeout: timeout, TTLSeconds: p.TTLSeconds,
 	}
-	if len(p.Command) > 0 {
+	if len(p.Command) > 0 && !c.commandIsNL(p) {
 		if err := probe.CheckScript(p.Command[0]); err != nil {
-			c.notice("status_probe_failed", "status_probe "+p.Key+": "+err.Error())
-			return Ready{}, false
+			msg := err.Error()
+			c.notice("status_probe_failed", "status_probe "+p.Key+": "+msg)
+			return Ready{}, Preview{Error: msg}, false
 		}
 		base.Command = append([]string(nil), p.Command...)
-		return base, true
+		return base, Preview{OK: true, Kind: p.Kind, Output: "handwritten " + p.Command[0]}, true
 	}
 	if c.Dir == "" {
-		c.notice("status_probe_failed", "status_probe "+p.Key+": probe dir missing")
-		return Ready{}, false
+		msg := "extensions dir missing"
+		c.notice("status_probe_failed", "status_probe "+p.Key+": "+msg)
+		return Ready{}, Preview{Error: msg}, false
 	}
-	if err := os.MkdirAll(c.Dir, 0o750); err != nil {
+	if err := os.MkdirAll(c.nlDir(p.Key), 0o750); err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+": "+err.Error())
-		return Ready{}, false
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	if p.Kind == config.StatusProbeHTTP {
 		return c.prepareHTTP(ctx, p, base)
 	}
-	scriptPath := filepath.Join(c.Dir, p.Key+".sh")
-	metaPath := filepath.Join(c.Dir, p.Key+".meta.json")
-	sum := intentHash(p.Kind, p.Intent, p.Path)
+	scriptPath := c.scriptPath(p.Key)
+	metaPath := c.metaPath(p.Key)
+	sum := IntentHash(p)
 	if cachedOK(scriptPath, metaPath, sum) {
 		base.Command = []string{scriptPath}
-		return base, true
+		prev := readPreviewFile(c.previewPath(p.Key))
+		if prev.Output == "" {
+			prev = Preview{OK: true, Kind: p.Kind, Output: "cached " + scriptPath}
+		}
+		return base, prev, true
 	}
 	if !c.AIEnabled || c.Provider == nil {
-		if ready, ok := reuseOld(base, scriptPath); ok {
-			return ready, true
+		if ready, ok := c.reuseOld(base, p); ok {
+			return ready, Preview{OK: true, Kind: p.Kind, Output: "reused " + ready.Command[0]}, true
 		}
-		c.notice("status_probe_skipped", "status_probe "+p.Key+": ai disabled and no compiled script")
-		return Ready{}, false
+		msg := "ai disabled and no compiled script"
+		c.notice("status_probe_skipped", "status_probe "+p.Key+": "+msg)
+		return Ready{}, Preview{Error: msg}, false
 	}
 	body, err := c.generateScript(ctx, p)
 	if err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" compile: "+err.Error())
-		return reuseOld(base, scriptPath)
+		if ready, ok := c.reuseOld(base, p); ok {
+			return ready, Preview{OK: true, Kind: p.Kind, Output: "reused " + ready.Command[0], Error: err.Error()}, true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	if err := validateGenerated(body); err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" compile: "+err.Error())
-		return reuseOld(base, scriptPath)
+		if ready, ok := c.reuseOld(base, p); ok {
+			return ready, Preview{OK: true, Kind: p.Kind, Output: "reused " + ready.Command[0], Error: err.Error()}, true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	tmpPath := scriptPath + ".new"
 	if err := writeScript(tmpPath, body); err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" write: "+err.Error())
 		_ = os.Remove(tmpPath)
-		return reuseOld(base, scriptPath)
+		if ready, ok := c.reuseOld(base, p); ok {
+			return ready, Preview{OK: true, Kind: p.Kind, Output: "reused " + ready.Command[0], Error: err.Error()}, true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	out, _, err := probe.RunScript(ctx, []string{tmpPath}, timeout, 0)
 	if err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" trial: "+err.Error())
 		_ = os.Remove(tmpPath)
-		return reuseOld(base, scriptPath)
+		if ready, ok := c.reuseOld(base, p); ok {
+			return ready, Preview{OK: true, Kind: p.Kind, Output: "reused " + ready.Command[0], Error: err.Error()}, true
+		}
+		return Ready{}, Preview{Error: "trial: " + err.Error()}, false
 	}
 	if _, err := probe.ParseJSON(out); err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" trial json: "+err.Error())
 		_ = os.Remove(tmpPath)
-		return reuseOld(base, scriptPath)
+		if ready, ok := c.reuseOld(base, p); ok {
+			return ready, Preview{OK: true, Kind: p.Kind, Output: "reused " + ready.Command[0], Error: err.Error()}, true
+		}
+		return Ready{}, Preview{Error: "trial json: " + err.Error()}, false
 	}
 	if err := os.Rename(tmpPath, scriptPath); err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" install: "+err.Error())
 		_ = os.Remove(tmpPath)
-		return reuseOld(base, scriptPath)
+		if ready, ok := c.reuseOld(base, p); ok {
+			return ready, Preview{OK: true, Kind: p.Kind, Output: "reused " + ready.Command[0], Error: err.Error()}, true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	_ = os.Chmod(scriptPath, scriptMode)
-	if err := writeMeta(metaPath, probeMeta{Hash: sum, Kind: p.Kind, Intent: p.Intent, Path: p.Path}); err != nil {
+	if err := writeMeta(metaPath, metaFrom(p, sum)); err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" meta: "+err.Error())
 	}
 	base.Command = []string{scriptPath}
-	return base, true
+	return base, Preview{OK: true, Kind: p.Kind, Output: string(out)}, true
 }
 
-func reuseOld(base Ready, scriptPath string) (Ready, bool) {
-	metaPath := strings.TrimSuffix(scriptPath, ".sh") + ".meta.json"
+func (c *Compiler) reuseOld(base Ready, p config.StatusProbe) (Ready, bool) {
+	scriptPath := c.scriptPath(p.Key)
+	metaPath := c.metaPath(p.Key)
 	if probe.CheckScript(scriptPath) == nil && cachedKindOK(metaPath, base.Kind) {
 		base.Command = []string{scriptPath}
+		return base, true
+	}
+	if c.LegacyDir == "" {
+		return Ready{}, false
+	}
+	legacy := filepath.Join(c.LegacyDir, p.Key+".sh")
+	legacyMeta := filepath.Join(c.LegacyDir, p.Key+".meta.json")
+	if probe.CheckScript(legacy) == nil && cachedKindOK(legacyMeta, base.Kind) {
+		base.Command = []string{legacy}
 		return base, true
 	}
 	return Ready{}, false
@@ -180,6 +248,9 @@ func (c *Compiler) generateScript(ctx context.Context, p config.StatusProbe) (st
 	untrusted := "key=" + p.Key + "\nintent=" + p.Intent
 	if p.Path != "" {
 		untrusted += "\npath=" + p.Path
+	}
+	if len(p.IntentHistory) > 0 {
+		untrusted += "\nintent_history=" + strings.Join(p.IntentHistory, " | ")
 	}
 	task := "probe_script"
 	if p.Kind == config.StatusProbeService {
@@ -204,23 +275,31 @@ func (c *Compiler) generateScript(ctx context.Context, p config.StatusProbe) (st
 	return script, nil
 }
 
-func (c *Compiler) prepareHTTP(ctx context.Context, p config.StatusProbe, base Ready) (Ready, bool) {
-	artifactPath := filepath.Join(c.Dir, p.Key+".http.json")
-	metaPath := filepath.Join(c.Dir, p.Key+".meta.json")
-	sum := intentHash(p.Kind, p.Intent, p.Path)
+func (c *Compiler) prepareHTTP(ctx context.Context, p config.StatusProbe, base Ready) (Ready, Preview, bool) {
+	artifactPath := c.httpPath(p.Key)
+	metaPath := c.metaPath(p.Key)
+	sum := IntentHash(p)
 	if metaHashOK(metaPath, sum) {
 		if target, err := readHTTPTarget(artifactPath, p); err == nil {
 			base.HTTP = target
-			return base, true
+			prev := readPreviewFile(c.previewPath(p.Key))
+			if prev.Output == "" {
+				prev = httpPreview(target, p)
+			}
+			return base, prev, true
 		}
 	}
 	if !c.AIEnabled || c.Provider == nil {
 		if target, err := readHTTPTarget(artifactPath, p); err == nil {
 			base.HTTP = target
-			return base, true
+			return base, httpPreview(target, p), true
 		}
-		c.notice("status_probe_skipped", "status_probe "+p.Key+": ai disabled and no compiled http target")
-		return Ready{}, false
+		if ready, ok := c.reuseHTTP(base, p); ok {
+			return ready, httpPreview(ready.HTTP, p), true
+		}
+		msg := "ai disabled and no compiled http target"
+		c.notice("status_probe_skipped", "status_probe "+p.Key+": "+msg)
+		return Ready{}, Preview{Error: msg}, false
 	}
 	res, err := c.Provider.Run(ctx, aiprovider.Request{
 		Task:      "http_probe_config",
@@ -231,48 +310,79 @@ func (c *Compiler) prepareHTTP(ctx context.Context, p config.StatusProbe, base R
 	})
 	if err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" compile: "+err.Error())
-		return reuseHTTP(base, artifactPath, p)
+		if ready, ok := c.reuseHTTP(base, p); ok {
+			prev := httpPreview(ready.HTTP, p)
+			prev.Error = err.Error()
+			return ready, prev, true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	var artifact httpArtifact
 	if err := json.Unmarshal([]byte(ExtractJSON(res.Text)), &artifact); err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" compile json: "+err.Error())
-		return reuseHTTP(base, artifactPath, p)
+		if ready, ok := c.reuseHTTP(base, p); ok {
+			prev := httpPreview(ready.HTTP, p)
+			prev.Error = err.Error()
+			return ready, prev, true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	target, err := artifact.target(p)
 	if err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" compile: "+err.Error())
-		return reuseHTTP(base, artifactPath, p)
+		if ready, ok := c.reuseHTTP(base, p); ok {
+			prev := httpPreview(ready.HTTP, p)
+			prev.Error = err.Error()
+			return ready, prev, true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	raw, _ := json.Marshal(artifact)
 	tmpPath := artifactPath + ".new"
 	if err := os.WriteFile(tmpPath, raw, 0o600); err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" write: "+err.Error())
-		return reuseHTTP(base, artifactPath, p)
+		if ready, ok := c.reuseHTTP(base, p); ok {
+			return ready, httpPreview(ready.HTTP, p), true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	if err := os.Chmod(tmpPath, 0o600); err != nil {
 		_ = os.Remove(tmpPath)
 		c.notice("status_probe_failed", "status_probe "+p.Key+" chmod: "+err.Error())
-		return reuseHTTP(base, artifactPath, p)
+		if ready, ok := c.reuseHTTP(base, p); ok {
+			return ready, httpPreview(ready.HTTP, p), true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
 	if err := os.Rename(tmpPath, artifactPath); err != nil {
 		_ = os.Remove(tmpPath)
 		c.notice("status_probe_failed", "status_probe "+p.Key+" install: "+err.Error())
-		return reuseHTTP(base, artifactPath, p)
+		if ready, ok := c.reuseHTTP(base, p); ok {
+			return ready, httpPreview(ready.HTTP, p), true
+		}
+		return Ready{}, Preview{Error: err.Error()}, false
 	}
-	if err := writeMeta(metaPath, probeMeta{Hash: sum, Kind: p.Kind, Intent: p.Intent, Path: p.Path}); err != nil {
+	if err := writeMeta(metaPath, metaFrom(p, sum)); err != nil {
 		c.notice("status_probe_failed", "status_probe "+p.Key+" meta: "+err.Error())
 	}
 	base.HTTP = target
-	return base, true
+	return base, httpPreview(target, p), true
 }
 
-func reuseHTTP(base Ready, artifactPath string, p config.StatusProbe) (Ready, bool) {
-	target, err := readHTTPTarget(artifactPath, p)
-	if err != nil {
+func (c *Compiler) reuseHTTP(base Ready, p config.StatusProbe) (Ready, bool) {
+	if target, err := readHTTPTarget(c.httpPath(p.Key), p); err == nil {
+		base.HTTP = target
+		return base, true
+	}
+	if c.LegacyDir == "" {
 		return Ready{}, false
 	}
-	base.HTTP = target
-	return base, true
+	legacy := filepath.Join(c.LegacyDir, p.Key+".http.json")
+	if target, err := readHTTPTarget(legacy, p); err == nil {
+		base.HTTP = target
+		return base, true
+	}
+	return Ready{}, false
 }
 
 func readHTTPTarget(path string, p config.StatusProbe) (*config.HTTPTarget, error) {
@@ -317,14 +427,193 @@ func (a httpArtifact) target(p config.StatusProbe) (*config.HTTPTarget, error) {
 	}, nil
 }
 
+func httpPreview(target *config.HTTPTarget, p config.StatusProbe) Preview {
+	if target == nil {
+		return Preview{Kind: config.StatusProbeHTTP, Error: "compiled http target missing"}
+	}
+	raw, _ := json.MarshalIndent(httpArtifact{
+		URL: target.URL, Method: target.Method,
+		ExpectStatus: target.ExpectStatus, ExpectContains: target.ExpectContains,
+	}, "", "  ")
+	out := string(raw)
+	if isLoopbackURL(target.URL) {
+		timeout := p.Timeout.Duration
+		if timeout <= 0 {
+			timeout = 15 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		res := collector.ProbeHTTP(ctx, timeout, true, collector.HTTPTarget{
+			ServiceKey: target.ServiceKey, Name: target.Name, URL: target.URL,
+			Method: target.Method, ExpectStatus: target.ExpectStatus,
+			ExpectContains: target.ExpectContains,
+		})
+		out += "\nprobe: " + res.Summary
+		if !res.OK && res.Err != "" {
+			out += " (" + res.Err + ")"
+		}
+	}
+	return Preview{OK: true, Kind: config.StatusProbeHTTP, Output: out}
+}
+
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	return host == "localhost" || (ip != nil && ip.IsLoopback())
+}
+
 func (c *Compiler) notice(code, md string) {
 	if c.Notice != nil {
 		c.Notice(code, md)
 	}
 }
 
-func intentHash(kind, intent, path string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(kind) + "\x00" + strings.TrimSpace(intent) + "\x00" + strings.TrimSpace(path)))
+func (c *Compiler) nlDir(key string) string {
+	return filepath.Join(c.Dir, "nl", key)
+}
+
+func (c *Compiler) scriptPath(key string) string {
+	return filepath.Join(c.nlDir(key), "probe.sh")
+}
+
+func (c *Compiler) httpPath(key string) string {
+	return filepath.Join(c.nlDir(key), "http.json")
+}
+
+func (c *Compiler) metaPath(key string) string {
+	return filepath.Join(c.nlDir(key), "meta.json")
+}
+
+func (c *Compiler) previewPath(key string) string {
+	return filepath.Join(c.nlDir(key), "preview.json")
+}
+
+func (c *Compiler) commandIsNL(p config.StatusProbe) bool {
+	if len(p.Command) == 0 || c.Dir == "" {
+		return false
+	}
+	got := filepath.Clean(p.Command[0])
+	want := filepath.Clean(c.scriptPath(p.Key))
+	if absGot, err := filepath.Abs(got); err == nil {
+		got = absGot
+	}
+	if absWant, err := filepath.Abs(want); err == nil {
+		want = absWant
+	}
+	return got == want
+}
+
+func (c *Compiler) writePreview(key string, prev Preview) {
+	if c.Dir == "" || key == "" {
+		return
+	}
+	if err := os.MkdirAll(c.nlDir(key), 0o750); err != nil {
+		return
+	}
+	b, err := json.MarshalIndent(prev, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(c.previewPath(key), b, 0o600)
+}
+
+// ReadPreview loads the last UI preview for a probe directory.
+func ReadPreview(dir string) Preview {
+	return readPreviewFile(filepath.Join(dir, "preview.json"))
+}
+
+func readPreviewFile(path string) Preview {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Preview{}
+	}
+	var p Preview
+	if json.Unmarshal(b, &p) != nil {
+		return Preview{Output: string(b)}
+	}
+	return p
+}
+
+// Built reports whether a compiled or handwritten artifact exists.
+func Built(p config.StatusProbe, extRoot, legacyDir string) bool {
+	if p.Kind == config.StatusProbeHTTP {
+		dir := p.Dir
+		if dir == "" {
+			dir = config.NLRelDir(p.Key)
+		}
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(extRoot, dir)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "http.json")); err == nil {
+			return true
+		}
+		if legacyDir != "" {
+			_, err := os.Stat(filepath.Join(legacyDir, p.Key+".http.json"))
+			return err == nil
+		}
+		return false
+	}
+	if len(p.Command) > 0 && probe.CheckScript(p.Command[0]) == nil {
+		return true
+	}
+	dir := p.Dir
+	if dir == "" {
+		dir = config.NLRelDir(p.Key)
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(extRoot, dir)
+	}
+	if probe.CheckScript(filepath.Join(dir, "probe.sh")) == nil {
+		return true
+	}
+	if legacyDir != "" && probe.CheckScript(filepath.Join(legacyDir, p.Key+".sh")) == nil {
+		return true
+	}
+	return false
+}
+
+// ApplyBuildResult writes dir/command onto the YAML probe after a successful compile.
+func ApplyBuildResult(p *config.StatusProbe, ready Ready) {
+	if p == nil || ready.Key == "" {
+		return
+	}
+	p.Dir = config.NLRelDir(p.Key)
+	if ready.Kind != config.StatusProbeHTTP && len(ready.Command) > 0 {
+		p.Command = append([]string(nil), ready.Command...)
+	}
+	if ready.Kind == config.StatusProbeHTTP {
+		p.Command = nil
+	}
+}
+
+func metaFrom(p config.StatusProbe, sum string) probeMeta {
+	return probeMeta{
+		Hash: sum, Kind: p.Kind, Intent: p.Intent,
+		IntentHistory: append([]string(nil), p.IntentHistory...), Path: p.Path,
+	}
+}
+
+// IntentHash covers kind, current intent, path, and intent_history.
+func IntentHash(p config.StatusProbe) string {
+	kind := strings.TrimSpace(p.Kind)
+	if kind == "" {
+		kind = config.StatusProbeMetric
+	}
+	var b strings.Builder
+	b.WriteString(kind)
+	b.WriteByte(0)
+	b.WriteString(strings.TrimSpace(p.Intent))
+	b.WriteByte(0)
+	b.WriteString(strings.TrimSpace(p.Path))
+	for _, h := range p.IntentHistory {
+		b.WriteByte(0)
+		b.WriteString(strings.TrimSpace(h))
+	}
+	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -371,6 +660,9 @@ func writeMeta(path string, m probeMeta) error {
 }
 
 func writeScript(path, body string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return err
+	}
 	if err := os.WriteFile(path, []byte(body), scriptMode); err != nil {
 		return err
 	}

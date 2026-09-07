@@ -244,6 +244,31 @@ ai:
 	}
 }
 
+func TestCompileStatusProbesSkipsDisabled(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "gpu.sh")
+	body := "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"running\",\"statuses\":[{\"key\":\"gpu_util\",\"value\":\"1\"}]}'\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := testRunner(t, `version: 1
+server:
+  url: "http://127.0.0.1:9"
+machine:
+  key: "home-server"
+  status_probes:
+    - key: gpu
+      enabled: false
+      command: ["`+script+`"]
+storage:
+  spool_path: "SPOOL"
+`)
+	r.compileStatusProbes(context.Background())
+	if len(r.snapshotReady()) != 0 {
+		t.Fatalf("disabled should not be ready: %+v", r.snapshotReady())
+	}
+}
+
 func TestIngestTerminalWritesBoardClientAuditOnce(t *testing.T) {
 	r := testRunner(t, `version: 1
 server:
