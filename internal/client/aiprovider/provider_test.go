@@ -38,6 +38,32 @@ func TestBuildPromptKeepsPrefixAndFence(t *testing.T) {
 	}
 }
 
+func TestBuildPromptTypedProbeContracts(t *testing.T) {
+	for _, tc := range []struct {
+		task string
+		want []string
+	}{
+		{"service_probe_script", []string{"docker exec", "单个 JSON 对象", "禁止修改服务"}},
+		{"http_probe_config", []string{"expect_status", "GET 或 HEAD", "无用户名密码"}},
+	} {
+		t.Run(tc.task, func(t *testing.T) {
+			p := BuildPrompt(Request{Task: tc.task, Untrusted: "用户输入 curl http://bad.example"})
+			if !HasUntrustedFence(p) {
+				t.Fatal("missing untrusted fence")
+			}
+			prefix := PrefixBeforeUntrusted(p)
+			for _, want := range tc.want {
+				if !strings.Contains(prefix, want) {
+					t.Fatalf("prompt missing %q:\n%s", want, prefix)
+				}
+			}
+			if strings.Contains(prefix, "bad.example") {
+				t.Fatal("untrusted intent leaked into fixed prefix")
+			}
+		})
+	}
+}
+
 func TestRedactSecrets(t *testing.T) {
 	in := "token=abp_m_supersecret token=sk-abcdefghijklmn Bearer abcdefgh api_key=xyz-999 password: hunter2"
 	out := Redact(in)

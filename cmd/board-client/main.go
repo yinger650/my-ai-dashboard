@@ -113,6 +113,7 @@ Usage:
   board-client version
 
 Token: non-empty $ABP_MACHINE_TOKEN overrides server.machine_token in YAML.
+config tui/web inherit key and server.url, toggle built-in features, and keep custom lists.
 status_probe scripts are compiled locally; the board never sends commands.
 wrap and agentboard-report are mutually exclusive for the same task.
 `, version)

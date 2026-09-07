@@ -3,71 +3,329 @@ package cfgui
 import (
 	"context"
 	"fmt"
-	"html/template"
+	"html"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"agentboard/internal/client/config"
 )
 
-const page = `<!DOCTYPE html>
+func escape(s string) string { return html.EscapeString(s) }
+
+func renderPage(m *Model, flash, errMsg string) string {
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <title>board-client 配置</title>
 <style>
-body{font:16px/1.4 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem;background:#0b1020;color:#e8eefc}
+body{font:16px/1.4 system-ui,sans-serif;max-width:56rem;margin:2rem auto;padding:0 1rem;background:#0b1020;color:#e8eefc}
 input,button{font:inherit;padding:.35rem .5rem;border-radius:6px;border:1px solid #334}
-input{background:#11182c;color:#e8eefc;width:100%;box-sizing:border-box}
+input[type=text],input[type=password]{background:#11182c;color:#e8eefc;width:100%;box-sizing:border-box}
 label{display:block;margin:.8rem 0 .2rem}
-table{width:100%;border-collapse:collapse;margin-top:1rem}
-th,td{border-bottom:1px solid #223;padding:.3rem;text-align:left}
+table{width:100%;border-collapse:collapse;margin-top:.5rem}
+th,td{border-bottom:1px solid #223;padding:.3rem;text-align:left;vertical-align:top}
 button{background:#3b6cff;color:#fff;border:0;cursor:pointer;margin-top:1rem}
 .ok{color:#6ee7b7}.err{color:#fca5a5}
+.feat{margin:.25rem 0}.sub{margin-left:1.6rem}
+.new{color:#fbbf24;font-size:.85em;margin-left:.4rem}
+h2{margin-top:1.6rem;font-size:1.1rem;color:#9db4ff}
 </style>
 </head>
 <body>
 <h1>本机 board-client 配置</h1>
-<p>只改这台机器的 YAML，不是看板网站。保存后经 control.sock reload。</p>
-{{if .Flash}}<p class="ok">{{.Flash}}</p>{{end}}
-{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-<form method="post" action="/save">
+<p>只改这台机器的 YAML，不是看板网站。key / 上报 URL 从现有文件继承。保存后 overlay 写入并 reload。</p>
+`)
+	if flash != "" {
+		b.WriteString(`<p class="ok">` + escape(flash) + `</p>`)
+	}
+	if errMsg != "" {
+		b.WriteString(`<p class="err">` + escape(errMsg) + `</p>`)
+	}
+	b.WriteString(`<form method="post" action="/save">
+<h2>身份</h2>
 <label>server.url</label>
-<input name="url" value="{{.URL}}">
-<label>server.machine_token</label>
-<input name="token" type="password" value="{{.Token}}" placeholder="留空则保留原值" autocomplete="off">
-<h2>status_probes</h2>
-<table>
-<tr><th>key</th><th>intent</th><th>path</th><th>interval</th></tr>
-{{range .Probes}}
-<tr>
-<td><input name="key" value="{{.Key}}"></td>
-<td><input name="intent" value="{{.Intent}}"></td>
-<td><input name="path" value="{{.Path}}"></td>
-<td><input name="interval" value="{{.Interval}}"></td>
-</tr>
-{{end}}
-</table>
+<input type="text" name="url" value="` + escape(m.URL) + `">
+<label>machine.key</label>
+<input type="text" name="key" value="` + escape(m.Key) + `">
+<label>display_name</label>
+<input type="text" name="name" value="` + escape(m.Name) + `">
+<label>server.machine_token（空则保留）</label>
+<input type="password" name="token" value="" placeholder="` + escape(maskToken(m.Token)) + `" autocomplete="off">
+`)
+	var last string
+	for _, f := range config.Catalog() {
+		if f.Group != last {
+			b.WriteString(`<h2>默认功能 · ` + escape(f.Group) + `</h2>`)
+			last = f.Group
+		}
+		checked := ""
+		if m.Enabled[f.ID] {
+			checked = " checked"
+		}
+		badge := ""
+		if isNew(m, f.ID) {
+			badge = `<span class="new">新增</span>`
+		}
+		b.WriteString(`<div class="feat"><label><input type="checkbox" name="feat" value="` + escape(f.ID) + `"` + checked + `> ` + escape(f.Title) + badge + `</label></div>`)
+		for _, s := range f.Subs {
+			sc := ""
+			if m.Subs[f.ID][s.ID] {
+				sc = " checked"
+			}
+			sb := ""
+			if isNew(m, f.ID+"."+s.ID) {
+				sb = `<span class="new">新增</span>`
+			}
+			b.WriteString(`<div class="sub"><label><input type="checkbox" name="sub.` + escape(f.ID) + `" value="` + escape(s.ID) + `"` + sc + `> ` + escape(s.Title) + sb + `</label></div>`)
+		}
+	}
+	b.WriteString(`<h2>自然语言扩展</h2>
+<p>类型：metric 写入机器指标；service 创建虚拟服务；http 复用 HTTP 健康检查。自然语言编译需要启用 AI，并在本机设置 CURSOR_API_KEY。</p>
+<table><tr><th>key</th><th>类型</th><th>名称</th><th>自然语言描述</th><th>path</th><th>interval</th><th>TTL</th></tr>`)
+	rows := m.Probes
+	for len(rows) < 4 {
+		rows = append(rows, config.StatusProbe{})
+	}
+	for _, p := range rows {
+		b.WriteString(`<tr>
+<td><input type="text" name="probe_key" value="` + escape(p.Key) + `"></td>
+<td><select name="probe_kind">` + kindOptions(p.Kind) + `</select></td>
+<td><input type="text" name="probe_name" value="` + escape(p.Name) + `"></td>
+<td><input type="text" name="probe_intent" value="` + escape(p.Intent) + `"></td>
+<td><input type="text" name="probe_path" value="` + escape(p.Path) + `"></td>
+<td><input type="text" name="probe_interval" value="` + escape(config.FormatDuration(p.Interval)) + `"></td>
+<td><input type="number" min="0" name="probe_ttl" value="` + formatInt(p.TTLSeconds) + `"></td>
+</tr>`)
+	}
+	b.WriteString(`</table>
+<h2>自定义 · http.targets</h2>
+<table><tr><th>service_key</th><th>name</th><th>url</th></tr>`)
+	ht := m.HTTP
+	for len(ht) < 3 {
+		ht = append(ht, config.HTTPTarget{})
+	}
+	for _, t := range ht {
+		b.WriteString(`<tr>
+<td><input type="text" name="http_key" value="` + escape(t.ServiceKey) + `"></td>
+<td><input type="text" name="http_name" value="` + escape(t.Name) + `"></td>
+<td><input type="text" name="http_url" value="` + escape(t.URL) + `"></td>
+</tr>`)
+	}
+	b.WriteString(`</table>
+<h2>自定义 · probes.scripts</h2>
+<table><tr><th>service_key</th><th>name</th><th>command</th></tr>`)
+	sc := m.Scripts
+	for len(sc) < 3 {
+		sc = append(sc, config.ProbeScript{})
+	}
+	for _, s := range sc {
+		b.WriteString(`<tr>
+<td><input type="text" name="script_key" value="` + escape(s.ServiceKey) + `"></td>
+<td><input type="text" name="script_name" value="` + escape(s.Name) + `"></td>
+<td><input type="text" name="script_cmd" value="` + escape(strings.Join(s.Command, " ")) + `"></td>
+</tr>`)
+	}
+	b.WriteString(`</table>
 <button type="submit">保存并 reload</button>
 </form>
-</body></html>`
-
-type view struct {
-	URL    string
-	Token  string
-	Probes []probeView
-	Flash  string
-	Error  string
+</body></html>`)
+	return b.String()
 }
 
-type probeView struct {
-	Key, Intent, Path, Interval string
+func newMux(cfgPath string) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		m, err := loadModel(cfgPath)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(renderPage(&Model{Enabled: map[string]bool{}, Subs: map[string]map[string]bool{}, Unseen: map[string]bool{}}, "", err.Error())))
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(renderPage(m, "", "")))
+	})
+	mux.HandleFunc("/save", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		m, err := loadModel(cfgPath)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if u := strings.TrimSpace(r.Form.Get("url")); u != "" {
+			m.URL = u
+		}
+		if k := strings.TrimSpace(r.Form.Get("key")); k != "" {
+			m.Key = k
+		}
+		m.Name = strings.TrimSpace(r.Form.Get("name"))
+		if tok := strings.TrimSpace(r.Form.Get("token")); tok != "" {
+			m.Token = tok
+			m.tokenTouched = true
+		}
+		checked := map[string]bool{}
+		for _, id := range r.Form["feat"] {
+			checked[id] = true
+		}
+		for _, f := range config.Catalog() {
+			m.Enabled[f.ID] = checked[f.ID]
+			if len(f.Subs) == 0 {
+				continue
+			}
+			if m.Subs[f.ID] == nil {
+				m.Subs[f.ID] = map[string]bool{}
+			}
+			want := map[string]bool{}
+			for _, id := range r.Form["sub."+f.ID] {
+				want[id] = true
+			}
+			for _, s := range f.Subs {
+				m.Subs[f.ID][s.ID] = want[s.ID]
+			}
+		}
+		m.Probes = parseProbeForm(r)
+		m.HTTP = parseHTTPForm(r)
+		m.Scripts = parseScriptForm(r)
+		m.TouchP, m.TouchH, m.TouchS = true, true, true
+		if err := SaveAndReload(cfgPath, m.edit()); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(renderPage(m, "", err.Error())))
+			return
+		}
+		fresh, _ := loadModel(cfgPath)
+		if fresh == nil {
+			fresh = m
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(renderPage(fresh, "已保存", "")))
+	})
+	return mux
 }
 
-var pageT = template.Must(template.New("cfg").Parse(page))
+func parseProbeForm(r *http.Request) []config.StatusProbe {
+	keys := r.Form["probe_key"]
+	kinds := r.Form["probe_kind"]
+	names := r.Form["probe_name"]
+	intents := r.Form["probe_intent"]
+	paths := r.Form["probe_path"]
+	intervals := r.Form["probe_interval"]
+	ttls := r.Form["probe_ttl"]
+	var out []config.StatusProbe
+	for i, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		p := config.StatusProbe{Key: k}
+		if i < len(kinds) {
+			p.Kind = strings.TrimSpace(kinds[i])
+		}
+		if i < len(names) {
+			p.Name = strings.TrimSpace(names[i])
+		}
+		if i < len(intents) {
+			p.Intent = strings.TrimSpace(intents[i])
+		}
+		if i < len(paths) {
+			p.Path = strings.TrimSpace(paths[i])
+		}
+		if i < len(intervals) && strings.TrimSpace(intervals[i]) != "" {
+			d, err := time.ParseDuration(strings.TrimSpace(intervals[i]))
+			if err == nil {
+				p.Interval.Duration = d
+			}
+		}
+		if i < len(ttls) {
+			p.TTLSeconds, _ = strconv.Atoi(strings.TrimSpace(ttls[i]))
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func kindOptions(selected string) string {
+	if selected == "" {
+		selected = config.StatusProbeMetric
+	}
+	var b strings.Builder
+	for _, kind := range []string{config.StatusProbeMetric, config.StatusProbeService, config.StatusProbeHTTP} {
+		sel := ""
+		if selected == kind {
+			sel = ` selected`
+		}
+		b.WriteString(`<option value="` + kind + `"` + sel + `>` + kind + `</option>`)
+	}
+	return b.String()
+}
+
+func formatInt(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return strconv.Itoa(n)
+}
+
+func parseHTTPForm(r *http.Request) []config.HTTPTarget {
+	keys := r.Form["http_key"]
+	names := r.Form["http_name"]
+	urls := r.Form["http_url"]
+	var out []config.HTTPTarget
+	for i := range keys {
+		k := strings.TrimSpace(keys[i])
+		u := ""
+		if i < len(urls) {
+			u = strings.TrimSpace(urls[i])
+		}
+		if k == "" && u == "" {
+			continue
+		}
+		t := config.HTTPTarget{ServiceKey: k, URL: u}
+		if i < len(names) {
+			t.Name = strings.TrimSpace(names[i])
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func parseScriptForm(r *http.Request) []config.ProbeScript {
+	keys := r.Form["script_key"]
+	names := r.Form["script_name"]
+	cmds := r.Form["script_cmd"]
+	var out []config.ProbeScript
+	for i, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		s := config.ProbeScript{ServiceKey: k, Format: "json"}
+		if i < len(names) {
+			s.Name = strings.TrimSpace(names[i])
+		}
+		if i < len(cmds) {
+			s.Command = strings.Fields(cmds[i])
+		}
+		out = append(out, s)
+	}
+	return out
+}
 
 // RunWeb serves a loopback-only config form.
 func RunWeb(ctx context.Context, cfgPath, listen string) error {
@@ -80,81 +338,7 @@ func RunWeb(ctx context.Context, cfgPath, listen string) error {
 	if err := checkLoopback(listen); err != nil {
 		return err
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		v, err := loadView(cfgPath)
-		if err != nil {
-			v = view{Error: err.Error(), Probes: emptyProbes()}
-		}
-		_ = pageT.Execute(w, v)
-	})
-	mux.HandleFunc("/save", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		c, err := config.Read(cfgPath)
-		if err != nil && !os.IsNotExist(err) {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		if c == nil {
-			c = &config.Config{Version: 1}
-		}
-		if u := strings.TrimSpace(r.Form.Get("url")); u != "" {
-			c.Server.URL = u
-		}
-		if tok := strings.TrimSpace(r.Form.Get("token")); tok != "" {
-			c.Server.MachineToken = tok
-		}
-		keys := r.Form["key"]
-		intents := r.Form["intent"]
-		paths := r.Form["path"]
-		intervals := r.Form["interval"]
-		var probes []config.StatusProbe
-		for i := range keys {
-			k := strings.TrimSpace(keys[i])
-			if k == "" {
-				continue
-			}
-			p := config.StatusProbe{Key: k}
-			if i < len(intents) {
-				p.Intent = strings.TrimSpace(intents[i])
-			}
-			if i < len(paths) {
-				p.Path = strings.TrimSpace(paths[i])
-			}
-			if i < len(intervals) && strings.TrimSpace(intervals[i]) != "" {
-				d, err := time.ParseDuration(strings.TrimSpace(intervals[i]))
-				if err == nil {
-					p.Interval.Duration = d
-				}
-			}
-			probes = append(probes, p)
-		}
-		c.Machine.StatusProbes = probes
-		v, _ := loadView(cfgPath)
-		v.URL = c.Server.URL
-		v.Token = c.Server.MachineToken
-		v.Probes = toProbeViews(c.Machine.StatusProbes)
-		if err := SaveAndReload(cfgPath, c); err != nil {
-			v.Error = err.Error()
-			w.WriteHeader(http.StatusBadRequest)
-			_ = pageT.Execute(w, v)
-			return
-		}
-		v.Flash = "已保存"
-		_ = pageT.Execute(w, v)
-	})
-	s := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 4 * time.Second}
+	s := &http.Server{Addr: listen, Handler: newMux(cfgPath), ReadHeaderTimeout: 4 * time.Second}
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
@@ -171,32 +355,4 @@ func RunWeb(ctx context.Context, cfgPath, listen string) error {
 		return nil
 	}
 	return err
-}
-
-func loadView(path string) (view, error) {
-	c, err := config.Read(path)
-	if err != nil {
-		return view{Probes: emptyProbes()}, err
-	}
-	v := view{URL: c.Server.URL, Token: c.Server.MachineToken, Probes: toProbeViews(c.Machine.StatusProbes)}
-	for len(v.Probes) < 6 {
-		v.Probes = append(v.Probes, probeView{})
-	}
-	return v, nil
-}
-
-func toProbeViews(in []config.StatusProbe) []probeView {
-	var out []probeView
-	for _, p := range in {
-		iv := ""
-		if p.Interval.Duration > 0 {
-			iv = p.Interval.Duration.String()
-		}
-		out = append(out, probeView{Key: p.Key, Intent: p.Intent, Path: p.Path, Interval: iv})
-	}
-	return out
-}
-
-func emptyProbes() []probeView {
-	return make([]probeView, 6)
 }

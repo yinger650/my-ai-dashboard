@@ -71,6 +71,15 @@ export ABP_MACHINE_TOKEN='abp_m_...'      # 上一步复制的完整 Token
 
 看板上对应机器卡片将在数秒内出现实时 CPU / 内存 / 磁盘 / 网络指标。
 
+不会改 YAML、只想勾选功能时，用本机配置界面（不是看板网站）：
+
+```bash
+./bin/board-client config tui --config client.yaml
+./bin/board-client config web --config client.yaml
+```
+
+逐步说明（拿 Token、勾选功能、wrap 上报作业日志、升级后再配）见 [《小白教程：配置 board-client 上报日志》](docs/client-log-tutorial.md)。
+
 ## 远程客户端（阿里云网站探测）
 
 在另一台 Linux 机器（例如阿里云）上只跑 `board-client`，把本机指标和若干网站的 HTTP 探测结果报到 https://board.yinger650.com 。不需要在该机器上安装 `board-server`。

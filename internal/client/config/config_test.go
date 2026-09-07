@@ -340,6 +340,9 @@ machine:
 	if c.Machine.StatusProbes[0].Timeout.Duration != 15*time.Second {
 		t.Fatalf("timeout default %v", c.Machine.StatusProbes[0].Timeout.Duration)
 	}
+	if c.Machine.StatusProbes[0].Kind != StatusProbeMetric || c.Machine.StatusProbes[0].Name != "gpu" {
+		t.Fatalf("legacy defaults = %+v", c.Machine.StatusProbes[0])
+	}
 
 	bad := strings.Replace(src, "intent: \"NVIDIA GPU 利用率 0-100\"", "", 1)
 	if err := os.WriteFile(p, []byte(bad), 0o644); err != nil {
@@ -347,6 +350,61 @@ machine:
 	}
 	if _, err := Load(p); err == nil {
 		t.Fatal("probe without intent or command should fail")
+	}
+}
+
+func TestStatusProbeKindsAndValidation(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	t.Setenv("TEST_TOKEN_VAR", "abp_m_secret")
+	base := `version: 1
+server:
+  url: "http://127.0.0.1:8080"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "home-server"
+  status_probes:
+    - key: docker-nginx
+      kind: SERVICE
+      name: "容器 Nginx"
+      intent: "docker exec web nginx -t"
+    - key: local-health
+      kind: http
+      intent: "检查 http://127.0.0.1:18080/health"
+`
+	if err := os.WriteFile(p, []byte(base), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Machine.StatusProbes[0]; got.Kind != StatusProbeService || got.TTLSeconds != 180 || got.Name != "容器 Nginx" {
+		t.Fatalf("service defaults = %+v", got)
+	}
+	if got := c.Machine.StatusProbes[1]; got.Kind != StatusProbeHTTP || got.TTLSeconds != 180 || got.Name != "local-health" {
+		t.Fatalf("http defaults = %+v", got)
+	}
+
+	for name, mutate := range map[string]func(string) string{
+		"bad kind": func(s string) string {
+			return strings.Replace(s, "kind: SERVICE", "kind: process", 1)
+		},
+		"http command": func(s string) string {
+			return strings.Replace(s, `intent: "检查 http://127.0.0.1:18080/health"`, `intent: "health"`+"\n      command: [\"/bin/true\"]", 1)
+		},
+		"negative ttl": func(s string) string {
+			return strings.Replace(s, `intent: "docker exec web nginx -t"`, `intent: "docker exec web nginx -t"`+"\n      ttl_seconds: -1", 1)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(p, []byte(mutate(base)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(p); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
 }
 

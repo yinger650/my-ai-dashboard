@@ -18,7 +18,7 @@ var ErrUnavailable = errors.New("ai provider unavailable")
 
 // Request is one model call. UserPrompt cannot replace the fixed system prefix.
 type Request struct {
-	Task       string // summarize | triage | report
+	Task       string // summarize | triage | report | probe_script | service_probe_script | http_probe_config
 	UserPrompt string
 	Untrusted  string
 	WantJSON   bool

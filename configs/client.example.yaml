@@ -13,11 +13,25 @@ machine:
   display_name: "家庭服务器"
   status_probes:
     - key: gpu
+      kind: metric
       intent: "NVIDIA GPU 利用率 0-100"
-    - key: data_dir
-      intent: "/data 占用百分比"
+    - key: data_stats
+      kind: metric
+      intent: "统计 /data 占用百分比和文件数量"
       path: /data
       interval: 60s
+    - key: docker-nginx
+      kind: service
+      name: "容器内 Nginx"
+      intent: "通过 docker exec 检查 web 容器里的 nginx 进程与配置状态"
+      interval: 60s
+      ttl_seconds: 180
+    - key: local-health
+      kind: http
+      name: "本机健康接口"
+      intent: "检查 http://127.0.0.1:18080/health，期望状态码 200"
+      interval: 30s
+      ttl_seconds: 180
 
 storage:
   spool_path: "/var/lib/agentboard-client/spool.db"
