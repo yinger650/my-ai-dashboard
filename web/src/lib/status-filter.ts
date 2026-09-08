@@ -61,3 +61,30 @@ export function userFacingStatuses(
 ): StatusItem[] {
   return textStatuses(statuses).filter((st) => isUserFacingStatus(st, surface));
 }
+
+export interface StatusGroup {
+  key: string;
+  title: string;
+  items: StatusItem[];
+}
+
+/** Group status lines under their service so mixed-machine views stay readable. */
+export function groupStatusesByService(statuses: StatusItem[]): StatusGroup[] {
+  const groups: StatusGroup[] = [];
+  const index = new Map<string, number>();
+  for (const st of statuses) {
+    const key = st.service_id || st.service_key || "_";
+    const existing = index.get(key);
+    if (existing === undefined) {
+      index.set(key, groups.length);
+      groups.push({
+        key,
+        title: (st.service_name || st.service_key || "").trim() || "未命名服务",
+        items: [st],
+      });
+    } else {
+      groups[existing].items.push(st);
+    }
+  }
+  return groups;
+}

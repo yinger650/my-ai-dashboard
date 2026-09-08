@@ -84,7 +84,7 @@ export function MachineCard({
         </div>
       )}
 
-      <StatusLines statuses={lines} />
+      <StatusLines statuses={lines} grouped />
 
       <ActiveRunsList runs={m.active_runs ?? []} compact />
 

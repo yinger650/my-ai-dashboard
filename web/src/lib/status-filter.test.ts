@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StatusItem } from "../types";
-import { isUserFacingStatus, userFacingStatuses } from "./status-filter";
+import { groupStatusesByService, isUserFacingStatus, userFacingStatuses } from "./status-filter";
 
 function st(partial: Partial<StatusItem> & Pick<StatusItem, "status_key" | "label" | "value_json">): StatusItem {
   return {
@@ -97,5 +97,45 @@ describe("userFacingStatuses", () => {
       "card",
     );
     expect(rows.map((s) => s.status_key)).toEqual(["ssl_days"]);
+  });
+});
+
+describe("groupStatusesByService", () => {
+  it("groups mixed-service rows under each service title", () => {
+    const groups = groupStatusesByService([
+      st({
+        status_key: "ssl_days",
+        label: "证书",
+        value_json: "5",
+        service_id: "s-nginx",
+        service_key: "nginx",
+        service_name: "Nginx",
+      }),
+      st({
+        status_key: "queue",
+        label: "队列",
+        value_json: "4",
+        service_id: "s-cursor",
+        service_key: "cursor",
+        service_name: "Cursor Agent",
+      }),
+      st({
+        status_key: "workers",
+        label: "worker",
+        value_json: "2",
+        service_id: "s-nginx",
+        service_key: "nginx",
+        service_name: "Nginx",
+      }),
+    ]);
+    expect(groups.map((g) => g.title)).toEqual(["Nginx", "Cursor Agent"]);
+    expect(groups[0].items.map((s) => s.status_key)).toEqual(["ssl_days", "workers"]);
+  });
+
+  it("falls back when a row has no service name", () => {
+    const groups = groupStatusesByService([
+      st({ status_key: "model", label: "模型", value_json: '"llama"', service_key: "openclaw" }),
+    ]);
+    expect(groups[0].title).toBe("openclaw");
   });
 });
