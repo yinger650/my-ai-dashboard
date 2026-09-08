@@ -13,12 +13,16 @@ import (
 const (
 	// DefaultEventQuotaBytes is 5 GiB of event payload storage.
 	DefaultEventQuotaBytes int64 = 5 * 1024 * 1024 * 1024
-	// DefaultStaleRunIdle is how long a non-terminal run may go without a new
-	// log.append / log.pin before maintenance closes it.
+	// DefaultStaleRunIdle is how long a non-agent run may go without activity
+	// before maintenance closes it as timed_out.
 	DefaultStaleRunIdle = 24 * time.Hour
-	retentionBatch      = 2000
-	quotaLoopMax        = 40
-	staleRunCloseLog    = "超过 1 天没有新日志，已自动关闭。"
+	// DefaultAgentStaleRunIdle is how long an agent run may go without
+	// log.append / log.pin / run.transition before it is failed as interrupted.
+	DefaultAgentStaleRunIdle = 30 * time.Minute
+	retentionBatch           = 2000
+	quotaLoopMax             = 40
+	staleRunCloseLog         = "超过 1 天没有新日志，已自动关闭。"
+	agentInterruptedLog      = "任务被打断（无后续上报）"
 )
 
 // RetentionPolicy is the time + size cap for server-side history.
@@ -44,8 +48,8 @@ type RetentionResult struct {
 
 // ApplyRetention deletes expired sessions, aged history, and oldest events
 // when the payload store is over QuotaBytes. Current-state pins are kept.
-// Non-terminal runs with no new logs for StaleRunIdle are closed first so
-// last-log detection still sees the original events.
+// Non-terminal runs are closed first (agent ~30m interrupted, others StaleRunIdle)
+// so last-log detection still sees the original events.
 func (s *Store) ApplyRetention(ctx context.Context, p RetentionPolicy) (RetentionResult, error) {
 	var out RetentionResult
 	n, err := s.DeleteExpiredSessions(ctx)
@@ -261,23 +265,42 @@ func (s *Store) enforceEventQuota(ctx context.Context, quota int64) (deleted, by
 }
 
 type staleRunRow struct {
-	ID        string
-	ServiceID string
-	Status    string
-	CreatedAt string
-	StartedAt sql.NullString
-	MachineID string
+	ID          string
+	ServiceID   string
+	Status      string
+	CreatedAt   string
+	StartedAt   sql.NullString
+	MachineID   string
+	ServiceType string
 }
 
-// CloseStaleRuns marks non-terminal runs as timed_out (queued → cancelled)
-// when they have had no log.append / log.pin for idle. Runs with no logs
-// use created_at. Does not bump machine last_seen.
+type staleCloseKind struct {
+	agent  bool
+	idle   time.Duration
+	reason string
+	log    string
+}
+
+// CloseStaleRuns marks idle non-terminal runs finished.
+// Agent services: after DefaultAgentStaleRunIdle with no log.append / log.pin /
+// run.transition, status becomes failed (queued → cancelled) with
+// 「任务被打断（无后续上报）」. Other service types keep `idle` (default 24h)
+// and close as timed_out. Does not bump machine last_seen.
 func (s *Store) CloseStaleRuns(ctx context.Context, idle time.Duration) (int64, error) {
 	if idle <= 0 {
 		idle = DefaultStaleRunIdle
 	}
+	return s.closeStaleRuns(ctx, idle, DefaultAgentStaleRunIdle)
+}
+
+// CloseStaleAgentRuns only closes idle agent runs. Used by the short ticker
+// so interrupted coding sessions fail without waiting for hourly retention.
+func (s *Store) CloseStaleAgentRuns(ctx context.Context) (int64, error) {
+	return s.closeStaleRuns(ctx, 0, DefaultAgentStaleRunIdle)
+}
+
+func (s *Store) closeStaleRuns(ctx context.Context, jobIdle, agentIdle time.Duration) (int64, error) {
 	now := shared.NowUTC()
-	cutoff := shared.FormatTime(now.Add(-idle))
 	nowISO := shared.FormatTime(now)
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -286,83 +309,35 @@ func (s *Store) CloseStaleRuns(ctx context.Context, idle time.Duration) (int64, 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT r.id, r.service_id, r.status, r.created_at, r.started_at, sv.machine_id
-		FROM runs r
-		JOIN services sv ON sv.id = r.service_id
-		WHERE r.status IN ('queued','running','waiting_input','blocked')
-		  AND sv.deleted_at IS NULL
-		  AND COALESCE(
-		    (SELECT MAX(e.occurred_at) FROM events e
-		     WHERE e.run_id = r.id AND e.event_type IN ('log.append','log.pin')),
-		    r.created_at
-		  ) < ?`, cutoff)
-	if err != nil {
-		return 0, err
+	var kinds []staleCloseKind
+	if jobIdle > 0 {
+		kinds = append(kinds, staleCloseKind{agent: false, idle: jobIdle, reason: "no_logs", log: staleRunCloseLog})
 	}
-	var stale []staleRunRow
-	for rows.Next() {
-		var r staleRunRow
-		if err := rows.Scan(&r.ID, &r.ServiceID, &r.Status, &r.CreatedAt, &r.StartedAt, &r.MachineID); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		stale = append(stale, r)
+	if agentIdle > 0 {
+		kinds = append(kinds, staleCloseKind{agent: true, idle: agentIdle, reason: "interrupted", log: agentInterruptedLog})
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
-	}
-	rows.Close()
 
 	touched := map[string]struct{}{}
 	var closed int64
-	for _, r := range stale {
-		to := staleCloseStatus(r.Status)
-		if !event.AllowedTransition(r.Status, to) {
-			continue
-		}
-		start := r.CreatedAt
-		if r.StartedAt.Valid && r.StartedAt.String != "" {
-			start = r.StartedAt.String
-		}
-		dur := durationMsSince(start, now)
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE runs SET status = ?, finished_at = COALESCE(finished_at, ?),
-				duration_ms = COALESCE(duration_ms, ?), updated_at = ?
-			WHERE id = ? AND status = ?`,
-			to, nowISO, dur, nowISO, r.ID, r.Status); err != nil {
-			return 0, err
-		}
-		rtPayload, err := json.Marshal(event.RunTransition{
-			Status:     to,
-			FinishedAt: nowISO,
-			DurationMs: dur,
-			Metadata: map[string]any{
-				"closed_by": "maintenance",
-				"reason":    "no_logs",
-			},
-		})
+	for _, kind := range kinds {
+		rows, err := listStaleRunsTx(ctx, tx, now.Add(-kind.idle), kind.agent)
 		if err != nil {
 			return 0, err
 		}
-		sid, rid := r.ServiceID, r.ID
-		if err := insertMaintenanceEventTx(ctx, tx, r.MachineID, &sid, &rid, event.TypeRunTransition, event.RunSeverity(to), nowISO, rtPayload); err != nil {
-			return 0, err
+		for _, r := range rows {
+			to := staleCloseStatus(r.Status, kind.agent)
+			if !event.AllowedTransition(r.Status, to) {
+				continue
+			}
+			n, err := closeOneStaleRunTx(ctx, tx, r, to, kind, now, nowISO)
+			if err != nil {
+				return 0, err
+			}
+			if n {
+				touched[r.ServiceID] = struct{}{}
+				closed++
+			}
 		}
-		logPayload, err := json.Marshal(event.LogPayload{
-			Markdown: staleRunCloseLog,
-			Severity: "warning",
-			Source:   "board-server",
-		})
-		if err != nil {
-			return 0, err
-		}
-		if err := insertMaintenanceEventTx(ctx, tx, r.MachineID, &sid, &rid, event.TypeLogAppend, "warning", nowISO, logPayload); err != nil {
-			return 0, err
-		}
-		touched[r.ServiceID] = struct{}{}
-		closed++
 	}
 	for sid := range touched {
 		if err := s.refreshActiveRunSummaryTx(ctx, tx, sid, nowISO); err != nil {
@@ -375,9 +350,98 @@ func (s *Store) CloseStaleRuns(ctx context.Context, idle time.Duration) (int64, 
 	return closed, nil
 }
 
-func staleCloseStatus(from string) string {
-	if from == "queued" {
+func listStaleRunsTx(ctx context.Context, tx *sql.Tx, cutoff time.Time, agent bool) ([]staleRunRow, error) {
+	typePred := "sv.type <> 'agent'"
+	if agent {
+		typePred = "sv.type = 'agent'"
+	}
+	q := `
+		SELECT r.id, r.service_id, r.status, r.created_at, r.started_at, sv.machine_id, sv.type
+		FROM runs r
+		JOIN services sv ON sv.id = r.service_id
+		WHERE r.status IN ('queued','running','waiting_input','blocked')
+		  AND sv.deleted_at IS NULL
+		  AND ` + typePred + `
+		  AND COALESCE(
+		    (SELECT MAX(e.occurred_at) FROM events e
+		     WHERE e.run_id = r.id AND e.event_type IN ('log.append','log.pin','run.transition')),
+		    r.created_at
+		  ) < ?`
+	rows, err := tx.QueryContext(ctx, q, shared.FormatTime(cutoff))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var stale []staleRunRow
+	for rows.Next() {
+		var r staleRunRow
+		if err := rows.Scan(&r.ID, &r.ServiceID, &r.Status, &r.CreatedAt, &r.StartedAt, &r.MachineID, &r.ServiceType); err != nil {
+			return nil, err
+		}
+		stale = append(stale, r)
+	}
+	return stale, rows.Err()
+}
+
+func closeOneStaleRunTx(ctx context.Context, tx *sql.Tx, r staleRunRow, to string, kind staleCloseKind, now time.Time, nowISO string) (bool, error) {
+	start := r.CreatedAt
+	if r.StartedAt.Valid && r.StartedAt.String != "" {
+		start = r.StartedAt.String
+	}
+	dur := durationMsSince(start, now)
+	summary := ""
+	if kind.agent {
+		summary = kind.log
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE runs SET status = ?, summary = COALESCE(NULLIF(?, ''), summary),
+			finished_at = COALESCE(finished_at, ?),
+			duration_ms = COALESCE(duration_ms, ?), updated_at = ?
+		WHERE id = ? AND status = ?`,
+		to, summary, nowISO, dur, nowISO, r.ID, r.Status); err != nil {
+		return false, err
+	}
+	rtPayload, err := json.Marshal(event.RunTransition{
+		Status:     to,
+		Summary:    summary,
+		FinishedAt: nowISO,
+		DurationMs: dur,
+		Metadata: map[string]any{
+			"closed_by": "maintenance",
+			"reason":    kind.reason,
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	sid, rid := r.ServiceID, r.ID
+	if err := insertMaintenanceEventTx(ctx, tx, r.MachineID, &sid, &rid, event.TypeRunTransition, event.RunSeverity(to), nowISO, rtPayload); err != nil {
+		return false, err
+	}
+	logSev := "warning"
+	if kind.agent {
+		logSev = "error"
+	}
+	logPayload, err := json.Marshal(event.LogPayload{
+		Markdown: kind.log,
+		Severity: logSev,
+		Source:   "board-server",
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := insertMaintenanceEventTx(ctx, tx, r.MachineID, &sid, &rid, event.TypeLogAppend, logSev, nowISO, logPayload); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func staleCloseStatus(from string, agent bool) string {
+	if from == "queued" || from == "waiting_input" {
 		return "cancelled"
+	}
+	if agent {
+		return "failed"
 	}
 	return "timed_out"
 }

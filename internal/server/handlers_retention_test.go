@@ -123,8 +123,11 @@ func TestMaintenanceClosesStaleRuns(t *testing.T) {
 		t.Fatalf("runs_closed %+v", got)
 	}
 	runs, err := st.ListRuns(ctx, svc.ID, 10)
-	if err != nil || len(runs) != 1 || runs[0].Status != "timed_out" {
+	if err != nil || len(runs) != 1 || runs[0].Status != "failed" {
 		t.Fatalf("run after close: %v %+v", err, runs)
+	}
+	if runs[0].Summary != "任务被打断（无后续上报）" {
+		t.Fatalf("summary=%q", runs[0].Summary)
 	}
 }
 
@@ -138,14 +141,14 @@ func TestBoardGETClosesStaleRuns(t *testing.T) {
 	auth := store.IngestAuth{MachineID: m.ID, AutoCreateServices: true}
 	now := shared.NowUTC()
 	received := shared.FormatTime(now)
-	ingestRun := func(key, status, summary string) {
+	ingestRun := func(key, status, summary string, occurred time.Time) {
 		t.Helper()
 		pb, _ := json.Marshal(event.RunTransition{ServiceName: "Cursor", ServiceType: "agent", Status: status, Summary: summary})
 		env := &event.Envelope{
 			SchemaVersion: 1,
 			EventID:       shared.NewID(),
 			EventType:     event.TypeRunTransition,
-			OccurredAt:    received,
+			OccurredAt:    shared.FormatTime(occurred),
 			ServiceKey:    "cursor",
 			RunKey:        key,
 			Payload:       pb,
@@ -154,8 +157,8 @@ func TestBoardGETClosesStaleRuns(t *testing.T) {
 			t.Fatalf("run %s: %v %+v", key, err, r)
 		}
 	}
-	ingestRun("abandoned-1", "running", "old task")
-	ingestRun("live-1", "running", "fresh task")
+	ingestRun("abandoned-1", "running", "old task", now.Add(-48*time.Hour))
+	ingestRun("live-1", "running", "fresh task", now)
 	svc, err := st.GetServiceByKey(ctx, m.ID, "cursor")
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +233,7 @@ func TestBoardGETClosesStaleRuns(t *testing.T) {
 	for _, r := range runs {
 		got[r.RunKey] = r.Status
 	}
-	if got["abandoned-1"] != "timed_out" || got["live-1"] != "running" {
+	if got["abandoned-1"] != "failed" || got["live-1"] != "running" {
 		t.Fatalf("statuses=%v", got)
 	}
 }
