@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -14,12 +14,21 @@ import { ScrollText } from "lucide-react";
 import { apiGet } from "../api";
 import type { ActiveRun, Machine, MetricSample, Service, StatusItem } from "../types";
 import { HealthBadge, SevDot } from "../components/Severity";
-import { fmtBps, localTime, relativeTime, usagePct } from "../format";
+import { NetworkRate } from "../components/NetworkRate";
+import { localTime, relativeTime, usagePct } from "../format";
 import { describeServiceFunction, describeServiceStatus } from "../lib/service-brief";
-import { collectPercentMetrics, hasNetworkSample } from "../lib/board-metrics";
+import { collectPercentMetrics } from "../lib/board-metrics";
 import { userFacingStatuses } from "../lib/status-filter";
-import { PercentMetricGrid } from "../components/PercentMetricGrid";
+import { MachineTileGrid } from "../components/MachineTileGrid";
 import { StatusLines } from "../components/StatusLines";
+import {
+  addExtraTile,
+  buildMachineTiles,
+  readMachineExtraTiles,
+  removeExtraTile,
+  statusTileKey,
+  writeMachineExtraTiles,
+} from "../lib/machine-tiles";
 import { ActiveRunsList } from "../components/ActiveRunsList";
 import { MachineLogStream } from "../components/MachineLogStream";
 import { visibleHostServices } from "../lib/host-services";
@@ -45,7 +54,13 @@ export function MachineDetailPage() {
   const { machineId } = useParams();
   const [range, setRange] = useState("1h");
   const [logOpen, setLogOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [extraKeys, setExtraKeys] = useState<string[]>([]);
   const wide = useMediaQuery(WIDE_QUERY);
+
+  useEffect(() => {
+    setExtraKeys(readMachineExtraTiles(machineId));
+  }, [machineId]);
 
   const detail = useQuery({
     queryKey: ["machine", machineId],
@@ -74,7 +89,18 @@ export function MachineDetailPage() {
     statuses: detail.data!.statuses,
   });
   const lines = userFacingStatuses(detail.data!.statuses, "machine");
-  const showNet = hasNetworkSample(lm);
+  const { tiles, canAdd } = buildMachineTiles(percents, extraKeys, detail.data!.statuses);
+
+  function persistExtras(next: string[]) {
+    if (!machineId) return;
+    setExtraKeys(next);
+    writeMachineExtraTiles(machineId, next);
+  }
+
+  function onPickStatus(st: StatusItem) {
+    persistExtras(addExtraTile(extraKeys, statusTileKey(st), percents.length));
+    setPickerOpen(false);
+  }
   const visibleServices = visibleHostServices(services.data ?? [], {
     kind: m.kind,
     machineLastSeenAt: m.last_seen_at,
@@ -95,9 +121,10 @@ export function MachineDetailPage() {
         </Link>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-xl font-semibold tracking-tight">{m.name}</h1>
               <HealthBadge health={detail.data!.health} />
+              <NetworkRate rx={lm?.network_rx_bps} tx={lm?.network_tx_bps} />
             </div>
             <p className="text-sm text-slate-400">
               {m.hostname ?? "-"} · {m.os ?? "-"}/{m.arch ?? "-"} · Collector {m.collector_version ?? "-"} · 最后上报{" "}
@@ -109,16 +136,15 @@ export function MachineDetailPage() {
 
       <div className={cn("flex min-h-0 flex-1 flex-col gap-4", wide && "flex-row")}>
         <div className={cn("min-w-0", wide && "flex-1 overflow-y-auto pr-1")}>
-          {(percents.length > 0 || showNet) && (
-            <div className="mb-4">
-              <PercentMetricGrid metrics={percents} />
-              {showNet && (
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                  <Stat label="网络" value={`↓${fmtBps(lm?.network_rx_bps ?? null)}`} sub={`↑${fmtBps(lm?.network_tx_bps ?? null)}`} />
-                </div>
-              )}
-            </div>
-          )}
+          <MachineTileGrid
+            tiles={tiles}
+            canAdd={canAdd}
+            pickerOpen={pickerOpen}
+            onPickerOpenChange={setPickerOpen}
+            statuses={lines}
+            onPick={onPickStatus}
+            onRemove={(id) => persistExtras(removeExtraTile(extraKeys, id))}
+          />
           {lines.length > 0 && (
             <div className="card mb-4 p-4">
               <h2 className="mb-2 text-sm font-medium text-slate-400">状态</h2>
@@ -245,12 +271,3 @@ function MachineLogsPane({ machineId }: { machineId: string }) {
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="card p-4">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="text-xl font-semibold">{value}</div>
-      {sub && <div className="text-xs text-slate-500">{sub}</div>}
-    </div>
-  );
-}

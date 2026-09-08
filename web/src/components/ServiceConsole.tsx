@@ -8,13 +8,36 @@ import { filterLogsByRuns } from "../lib/run-logs";
 import { isActiveRunStatus, runStatusSeverity, shortRunKey } from "../lib/active-runs";
 import { cn } from "../lib/utils";
 
-export function PinnedLogPanel({ pin }: { pin: PinnedLog | null }) {
+export function PinnedLogPanel({
+  pin,
+  onClear,
+  clearing = false,
+}: {
+  pin: PinnedLog | null;
+  onClear?: () => void;
+  clearing?: boolean;
+}) {
   return (
     <section className="ab-panel mb-5 flex min-h-[10rem] flex-col">
       <header className="flex shrink-0 items-center gap-2 border-b border-[#1f2a44] px-3 py-2">
         <Pin className="h-3.5 w-3.5 text-indigo-300" aria-hidden />
         <span className="ab-eyebrow">置顶</span>
-        {pin && <span className="ml-auto font-mono text-[11px] text-slate-500">{localTime(pin.occurred_at)}</span>}
+        {pin && (
+          <>
+            <span className="ml-auto font-mono text-[11px] text-slate-500">{localTime(pin.occurred_at)}</span>
+            {onClear && (
+              <button
+                type="button"
+                onClick={onClear}
+                disabled={clearing}
+                aria-label="清除置顶"
+                className="text-[11px] text-indigo-300 hover:text-indigo-200 disabled:opacity-50"
+              >
+                清除
+              </button>
+            )}
+          </>
+        )}
       </header>
       {pin ? (
         <div className="log-pane min-h-[8rem] max-h-[20rem] flex-1 overflow-y-auto px-4 py-3">

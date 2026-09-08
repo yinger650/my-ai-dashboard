@@ -18,7 +18,7 @@ export const DEFAULT_CARD_PINS = [
   { key: "cron", name: "Cron" },
 ] as const;
 
-const CARD_PIN_KEYS = new Set(DEFAULT_CARD_PINS.map((p) => p.key));
+const CARD_PIN_KEYS = new Set<string>(DEFAULT_CARD_PINS.map((p) => p.key));
 
 export function compactCardServices(
   services: BoardService[],

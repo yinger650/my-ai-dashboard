@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { apiGet } from "../api";
+import { apiDelete, apiGet } from "../api";
 import type { LogEntry, Machine, PinnedLog, Run, Service, StatusItem } from "../types";
 import { SevDot } from "../components/Severity";
 import { PercentMetricGrid } from "../components/PercentMetricGrid";
@@ -22,6 +22,7 @@ interface ServiceDetail {
 
 export function ServiceDetailPage() {
   const { serviceId } = useParams();
+  const qc = useQueryClient();
   const [selectedRunKeys, setSelectedRunKeys] = useState<string[]>([]);
 
   const detail = useQuery({
@@ -38,6 +39,12 @@ export function ServiceDetailPage() {
     queryKey: ["service-runs", serviceId],
     queryFn: () => apiGet<Run[]>(`/api/v1/services/${serviceId}/runs`),
     refetchInterval: 15000,
+  });
+  const clearPin = useMutation({
+    mutationFn: () => apiDelete(`/api/v1/services/${serviceId}/pinned`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["service", serviceId] });
+    },
   });
 
   useEffect(() => {
@@ -94,7 +101,11 @@ export function ServiceDetailPage() {
         </div>
       )}
 
-      <PinnedLogPanel pin={detail.data!.pinned ?? null} />
+      <PinnedLogPanel
+        pin={detail.data!.pinned ?? null}
+        onClear={detail.data!.pinned ? () => clearPin.mutate() : undefined}
+        clearing={clearPin.isPending}
+      />
 
       <ServiceRunsLogs
         runs={runs.data ?? []}

@@ -2,16 +2,17 @@ import { Link } from "react-router-dom";
 import { useCallback, useMemo, useState } from "react";
 import type { BoardMachine, LogEntry } from "../types";
 import { HealthBadge, SevDot } from "./Severity";
+import { NetworkRate } from "./NetworkRate";
 import { StatusList } from "./StatusList";
 import { StatusLines } from "./StatusLines";
 import { PercentMetricGrid } from "./PercentMetricGrid";
 import { MachineLogStream } from "./MachineLogStream";
 import { ActiveRunsList } from "./ActiveRunsList";
-import { fmtBps, relativeTime } from "../format";
+import { relativeTime } from "../format";
 import { cn } from "../lib/utils";
 import { countUnseenLogsByService } from "../lib/logs";
 import { readLogSeen, markServiceLogsSeen } from "../lib/log-seen";
-import { collectPercentMetrics, hasNetworkSample } from "../lib/board-metrics";
+import { collectPercentMetrics } from "../lib/board-metrics";
 import { userFacingStatuses } from "../lib/status-filter";
 import { GripVertical } from "lucide-react";
 
@@ -40,7 +41,6 @@ export function MachineCard({
     [lm, m.heartbeat_metrics, m.statuses],
   );
   const lines = useMemo(() => userFacingStatuses(m.statuses, "card"), [m.statuses]);
-  const showNet = hasNetworkSample(lm);
   const c = m.service_counts;
   const [liveLogs, setLiveLogs] = useState<LogEntry[]>(() => m.recent_logs ?? []);
   const [seenUntil, setSeenUntil] = useState<Record<string, string>>(readLogSeen);
@@ -74,15 +74,13 @@ export function MachineCard({
             {m.kind} · {m.machine_key}
           </div>
         </div>
-        <HealthBadge health={m.health} />
+        <div className="flex shrink-0 items-center gap-2">
+          <NetworkRate rx={lm?.network_rx_bps} tx={lm?.network_tx_bps} />
+          <HealthBadge health={m.health} />
+        </div>
       </header>
 
       <PercentMetricGrid metrics={percents} />
-      {showNet && (
-        <div className="mb-2 text-xs text-slate-400">
-          ↓ {fmtBps(lm?.network_rx_bps ?? null)} · ↑ {fmtBps(lm?.network_tx_bps ?? null)}
-        </div>
-      )}
 
       <StatusLines statuses={lines} grouped />
 

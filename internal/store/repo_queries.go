@@ -234,6 +234,22 @@ func (s *Store) ListPinnedLogsByMachine(ctx context.Context, machineID string) (
 	return out, rows.Err()
 }
 
+// DeletePinnedLog removes the pinned current-state log for a service.
+func (s *Store) DeletePinnedLog(ctx context.Context, serviceID string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM pinned_logs WHERE service_id = ?`, serviceID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListStatuses returns current status items for a service.
 func (s *Store) ListStatuses(ctx context.Context, serviceID string) ([]CurrentStatus, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT service_id, status_key, label, value_json, value_type, unit, severity, display_format, sort_order, occurred_at, updated_at FROM current_status WHERE service_id = ? ORDER BY sort_order, status_key`, serviceID)
