@@ -1,5 +1,5 @@
 ---
-description: 本项目每次会话必须向 AgentBoard 上报开始（正在做什么）与结束（已完成）
+description: 本项目每次会话必须向 AgentBoard 上报开始、结束，被打断时必须 fail
 alwaysApply: true
 ---
 
@@ -9,10 +9,17 @@ alwaysApply: true
 
 1. **开始时**：立刻 `start`，用一句话描述正在做什么
 2. **结束时**：成功 `succeed`（已完成 + 结果），失败 `fail`（原因）
+3. **被打断时**：用户停止、无法继续、会话被系统掐掉前，必须 `interrupt` 或 `fail "任务被打断：原因"`。禁止只 `start` 不收口。长等待要 `progress`。
 
-Token 在仓库根目录 `.env` 的 `AGENTBOARD_TOKEN`。脚本会自动读取 `.env`。未设置 token 时静默跳过，**不要**因此失败，也**不要**向用户索要或打印 token。本机 board-client 用自己的 token 报物理机，不能代替本 skill 的 token。
+Token 在仓库根目录 `.env` 的 `AGENTBOARD_TOKEN`。脚本会自动读取 `.env`。未设置 token 时：本机 board-client 若开了 ingest，仍会投影到 `proj-*`；两边都没有则静默跳过。**不要**因此失败，也**不要**向用户索要或打印 token。
 
 每次 `start` 一条新 Run。不要设置 `AGENTBOARD_RUN_KEY`，除非明确要续同一条 Run。
+
+## 双通道
+
+- `AGENTBOARD_TOKEN` → 项目 **virtual machine**
+- 本机 `board-client` 的 `ABP_MACHINE_TOKEN` + 本机 ingest → 物理机 `proj-*`
+- **两把 machine key 都在时，同一条会话日志会同时出现在两边。** wrap 与 `report.py` 才互斥。
 
 ## 怎么发
 
@@ -21,9 +28,10 @@ export AGENTBOARD_PROVIDER="${AGENTBOARD_PROVIDER:-cursor}"
 python3 skills/agentboard-report/scripts/report.py start "一句话：正在做什么"
 python3 skills/agentboard-report/scripts/report.py succeed "已完成：结果摘要"
 python3 skills/agentboard-report/scripts/report.py fail "失败原因"
+python3 skills/agentboard-report/scripts/report.py interrupt "用户停止"
 ```
 
-完整协议见 `skills/agentboard-report/SKILL.md`。
+完整协议见 `skills/agentboard-report/SKILL.md`。安装教程：`docs/agent-report-tutorial.md`。
 
 ## 其它触发（长程任务额外做）
 

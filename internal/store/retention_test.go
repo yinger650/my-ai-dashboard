@@ -169,9 +169,9 @@ func TestCloseStaleRunsNoLogsForOneDay(t *testing.T) {
 	}
 
 	seedRun("old-log", "running", 48*time.Hour, 36*time.Hour, true)
-	seedRun("fresh-log", "running", 48*time.Hour, 2*time.Hour, true)
+	seedRun("fresh-log", "running", 48*time.Hour, 10*time.Minute, true)
 	seedRun("no-log-old", "running", 48*time.Hour, 0, false)
-	seedRun("no-log-new", "running", 2*time.Hour, 0, false)
+	seedRun("no-log-new", "running", 10*time.Minute, 0, false)
 	seedRun("queued-old", "queued", 48*time.Hour, 0, false)
 	seedRun("done-old", "succeeded", 48*time.Hour, 36*time.Hour, true)
 
@@ -224,9 +224,9 @@ func TestCloseStaleRunsNoLogsForOneDay(t *testing.T) {
 		}
 	}
 	want := map[string]string{
-		"old-log":    "timed_out",
+		"old-log":    "failed",
 		"fresh-log":  "running",
-		"no-log-old": "timed_out",
+		"no-log-old": "failed",
 		"no-log-new": "running",
 		"queued-old": "cancelled",
 		"done-old":   "succeeded",
@@ -262,7 +262,7 @@ func TestCloseStaleRunsNoLogsForOneDay(t *testing.T) {
 	}
 	var sawClose bool
 	for _, l := range logs {
-		if l.Markdown == staleRunCloseLog && l.RunKey == "old-log" {
+		if l.Markdown == agentInterruptedLog && l.RunKey == "old-log" {
 			sawClose = true
 			break
 		}
@@ -277,6 +277,99 @@ func TestCloseStaleRunsNoLogsForOneDay(t *testing.T) {
 	}
 	if res2 != 0 {
 		t.Fatalf("second close = %d", res2)
+	}
+}
+
+func TestCloseStaleAgentVsJob(t *testing.T) {
+	ctx := t.Context()
+	st := newTestStore(t)
+	m := &Machine{MachineKey: "agentjob", Name: "AgentJob", Kind: "physical", Enabled: true, AutoCreateServices: true}
+	if err := st.CreateMachine(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	auth := IngestAuth{MachineID: m.ID, AutoCreateServices: true}
+	now := shared.NowUTC()
+	received := shared.FormatTime(now)
+
+	ingest := func(key, stype, status string, ago time.Duration) {
+		t.Helper()
+		name := "Cursor"
+		if stype != "agent" {
+			name = "board-client"
+		}
+		env := mkEnv(t, event.TypeRunTransition, key, key, event.RunTransition{
+			ServiceName: name, ServiceType: stype, Status: status, Summary: key,
+			StartedAt: shared.FormatTime(now.Add(-ago)),
+		})
+		env.OccurredAt = shared.FormatTime(now.Add(-ago))
+		if r, err := st.IngestEvent(ctx, env, auth, received); err != nil || r.Status != "accepted" {
+			t.Fatalf("%s: %v %+v", key, err, r)
+		}
+		svcID := mustServiceID(t, st, m.ID, key)
+		if _, err := st.db.ExecContext(ctx, `UPDATE runs SET created_at = ? WHERE service_id = ? AND run_key = ?`,
+			shared.FormatTime(now.Add(-ago)), svcID, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ingest("cursor-old", "agent", "running", 45*time.Minute)
+	ingest("cursor-fresh", "agent", "running", 10*time.Minute)
+	ingest("wrap-recent", "daemon", "running", 45*time.Minute)
+	ingest("wrap-old", "daemon", "running", 48*time.Hour)
+
+	n, err := st.CloseStaleRuns(ctx, DefaultStaleRunIdle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("closed=%d want 2 (agent-old + wrap-old)", n)
+	}
+
+	got := map[string]string{}
+	sum := map[string]string{}
+	for _, key := range []string{"cursor-old", "cursor-fresh", "wrap-recent", "wrap-old"} {
+		svc, err := st.GetServiceByKey(ctx, m.ID, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs, err := st.ListRuns(ctx, svc.ID, 5)
+		if err != nil || len(runs) != 1 {
+			t.Fatalf("%s runs: %v %+v", key, err, runs)
+		}
+		got[key] = runs[0].Status
+		sum[key] = runs[0].Summary
+	}
+	if got["cursor-old"] != "failed" || got["cursor-fresh"] != "running" {
+		t.Fatalf("agent statuses=%v", got)
+	}
+	if sum["cursor-old"] != agentInterruptedLog {
+		t.Fatalf("agent summary=%q", sum["cursor-old"])
+	}
+	if got["wrap-recent"] != "running" || got["wrap-old"] != "timed_out" {
+		t.Fatalf("job statuses=%v", got)
+	}
+
+	logs, err := st.ListServiceLogs(ctx, mustServiceID(t, st, m.ID, "cursor-old"), "", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saw bool
+	for _, l := range logs {
+		if l.Markdown == agentInterruptedLog {
+			saw = true
+			break
+		}
+	}
+	if !saw {
+		t.Fatalf("missing interrupt log: %+v", logs)
+	}
+
+	n2, err := st.CloseStaleAgentRuns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n2 != 0 {
+		t.Fatalf("agent-only second close = %d", n2)
 	}
 }
 

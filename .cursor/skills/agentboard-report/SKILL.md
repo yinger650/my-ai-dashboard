@@ -1,24 +1,22 @@
 # AgentBoard 上报
 
-本项目每次会话都必须上报：开始时 `start`（正在做什么），结束时 `succeed` / `fail`。发到 https://board.yinger650.com 。用 `.env` 里的 `AGENTBOARD_TOKEN`（virtual machine）直连看板。本机 board-client 用自己的 token 报物理机，并把打开的仓库投影为 `proj-*`。
+本项目每次会话都必须上报：开始时 `start`，结束时 `succeed` / `fail`，被打断时 `interrupt`。发到 https://board.yinger650.com 。
 
-完整说明：仓库根目录 `skills/agentboard-report/SKILL.md`。协议：`skills/agentboard-report/references/protocol.md`。
+- 项目 `.env` 的 `AGENTBOARD_TOKEN` → **virtual machine**
+- 本机 board-client 的 `ABP_MACHINE_TOKEN` + ingest → 物理机 `proj-*`
+- 两把 machine key 都在时，同一条会话日志同时出现在两边。未设项目 token 时，若本机 ingest 在跑仍会 tee。
 
-Token 在仓库根目录 `.env`，脚本会自动读取。未设置时**静默跳过**，不要中断用户任务，也不要打印 token。本机有 client 不能代替 token。
-
-每次 `start` 一条新 Run；不要手动设 `AGENTBOARD_RUN_KEY`。
+完整说明：仓库根目录 `skills/agentboard-report/SKILL.md`。安装：`docs/agent-report-tutorial.md`。
 
 ```bash
 export AGENTBOARD_PROVIDER="${AGENTBOARD_PROVIDER:-cursor}"
 
 python3 skills/agentboard-report/scripts/report.py start "一句话：正在做什么"
 python3 skills/agentboard-report/scripts/report.py progress "里程碑"
-python3 skills/agentboard-report/scripts/report.py error "内部错误"
 python3 skills/agentboard-report/scripts/report.py succeed "已完成：结果"
 python3 skills/agentboard-report/scripts/report.py fail "失败原因"
+python3 skills/agentboard-report/scripts/report.py interrupt "用户停止"
 python3 skills/agentboard-report/scripts/report.py heartbeat "alive"
 ```
 
-OpenClaw：session 开始就 `heartbeat`，之后每 ~60s 再发；TTL 180s 无心跳则看板显示 stale。
-
-本机作业用 `board-client wrap`（`skills/bc-wrapper/SKILL.md`），不要再 `report.py start`。
+不要打印 token。上报失败不能中断用户任务。本机作业用 `board-client wrap`，不要再 `report.py start`。

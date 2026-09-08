@@ -18,7 +18,7 @@ cp -a skills/agentboard-report ~/.openclaw/workspace/skills/agentboard-report
 openclaw skills list    # 应看到 agentboard-report
 ```
 
-新开 session（`/new`）或 `openclaw gateway restart` 后 skill 才会进 system prompt。
+新开 session（`/new`）或 `openclaw gateway restart` 后 skill 才会进 system prompt。项目 `AGENTS.md` 里的常驻片段仍然要有，这样每次会话都会 `start`/`succeed`/`fail`/`interrupt`。
 
 ## 环境变量（不要进 git）
 
@@ -32,7 +32,7 @@ export AGENTBOARD_SERVICE_KEY=openclaw
 export AGENTBOARD_TTL_SECONDS=180
 ```
 
-OpenClaw gating 需要 `AGENTBOARD_TOKEN` 与 `python3`。没有 token 时该 skill 可能被过滤；这是预期行为。
+OpenClaw gating 需要 `python3`。没有 token 时若本机 ingest 在跑仍会 tee 到 `proj-*`。
 
 ## 存活心跳
 
@@ -45,10 +45,4 @@ OpenClaw gating 需要 `AGENTBOARD_TOKEN` 与 `python3`。没有 token 时该 sk
 
 超过 180s 没有心跳，https://board.yinger650.com 上 `openclaw` 服务会显示 **TTL 过期**（可能已挂）。
 
-内部错误（gateway 崩溃循环、工具超时、认证失败）用：
-
-```bash
-python3 .../report.py error "gateway 反复重启：原因"
-```
-
-这会同时写 `log.append` 与 `collector.notice`。
+内部错误用 `error`；会话被掐掉用 `interrupt`。

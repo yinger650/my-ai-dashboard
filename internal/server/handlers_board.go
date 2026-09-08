@@ -15,8 +15,8 @@ import (
 	"agentboard/internal/store"
 )
 
-// closeStaleRunsBestEffort persists timed_out/cancelled for runs with no new
-// logs for a day so board cards drop them from 进行中 without a manual cleanup.
+// closeStaleRunsBestEffort persists failed/timed_out/cancelled for idle
+// runs so board cards drop them from 进行中 without a manual cleanup.
 func (s *Server) closeStaleRunsBestEffort(ctx context.Context) {
 	if _, err := s.st.CloseStaleRuns(ctx, store.DefaultStaleRunIdle); err != nil && s.log != nil {
 		s.log.Warn("close stale runs failed", "err", err)

@@ -218,12 +218,23 @@ func runServer() error {
 		runRetention()
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
+		agentTick := time.NewTicker(2 * time.Minute)
+		defer agentTick.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
 				runRetention()
+			case <-agentTick.C:
+				c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				n, err := st.CloseStaleAgentRuns(c)
+				cancel()
+				if err != nil {
+					log.Warn("close stale agent runs failed", "err", err)
+				} else if n > 0 {
+					log.Info("closed stale agent runs", "runs_closed", n)
+				}
 			}
 		}
 	}()
