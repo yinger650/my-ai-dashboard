@@ -36,7 +36,7 @@
 
 | 能力 | 摘要 |
 |---|---|
-| Agent HTTP 上报 | Cursor / Codex / OpenClaw 通过 `skills/agentboard-report` 自行 ingest（skill token → virtual machine）；与同机 `board-client` 独立；默认 TTL **180s** |
+| Agent HTTP 上报 | Cursor / Codex / Claude / OpenClaw / Hermes / Pi 通过 `skills/agentboard-report` 自行 ingest（skill token → virtual machine）；可同时 tee 到本机 `board-client` 的 `proj-*`；agent Run 空闲约 30 分钟无上报则 failed「任务被打断」；默认 TTL **180s** |
 | Service TTL 投影 | `ttl_seconds` 超时后只读投影为 `stale` + 「TTL 过期」，不改库 |
 | HTTP 网站探测 | `board-client` 对目标 URL 发探测，映射为 `virtual` Service |
 | Cursor transcript 扫描 | 客户端扫描本机 Cursor 会话文件，启发式总结（不是 Cloud Agents API） |
@@ -1245,33 +1245,36 @@ Agent **自己**发 HTTPS ingest，不是 `board-client`。
 | 产物 | 路径 |
 |---|---|
 | Skill | `skills/agentboard-report/SKILL.md` |
+| 常驻片段 | `skills/agentboard-report/always-on.md` |
 | wrap | `skills/bc-wrapper/SKILL.md` |
 | 自定义扩展 | `skills/board-client-extension/SKILL.md` |
 | 协议 | `skills/agentboard-report/references/protocol.md` |
 | 脚本 | `skills/agentboard-report/scripts/report.py` |
 | Cursor Rule | `.cursor/rules/agentboard-report.mdc` |
-| Codex / Cloud Agent | `AGENTS.md` |
+| Codex / Cloud Agent / Pi / Hermes | `AGENTS.md` |
+| Claude Code | `CLAUDE.md` |
 | 适配说明 | `skills/agentboard-report/adapters/` |
+| 安装教程 | `docs/agent-report-tutorial.md` |
 
 ```bash
 export AGENTBOARD_URL="${AGENTBOARD_URL:-https://board.yinger650.com}"
-export AGENTBOARD_PROVIDER="${AGENTBOARD_PROVIDER:-cursor}"   # cursor | codex | openclaw
+export AGENTBOARD_PROVIDER="${AGENTBOARD_PROVIDER:-cursor}"   # cursor | codex | claude | openclaw | hermes | pi
 python3 skills/agentboard-report/scripts/report.py start "一句话任务目标"
-python3 skills/agentboard-report/scripts/report.py heartbeat "alive"
+python3 skills/agentboard-report/scripts/report.py interrupt "用户停止"
 ```
 
-`AGENTBOARD_TOKEN` 未设置时脚本静默跳过，禁止中断用户任务，禁止打印 token，禁止用 `abp_v_` 上报。本机 `board-client` **不能**代替该 token。
+`AGENTBOARD_TOKEN` 未设置时：若本机 advertise `"mode":"tee"`，仍把事件复制到 loopback 投影为 `proj-*`；否则静默跳过。禁止中断用户任务，禁止打印 token，禁止用 `abp_v_` 上报。
 
-`report.py` 与同机 `board-client` 独立：
+`report.py` 与同机 `board-client` 独立，**两把 machine key 可同时推**：
 
 | 上报方 | Token | 挂到哪 | 典型 Service |
 |---|---|---|---|
-| `report.py`（本 skill） | `AGENTBOARD_TOKEN` | 项目 **virtual** Machine | `cursor` / `codex` / `openclaw` |
+| `report.py`（本 skill） | `AGENTBOARD_TOKEN` | 项目 **virtual** Machine | `cursor` / `codex` / `claude` / `openclaw` / `hermes` / `pi` |
 | `board-client` | `ABP_MACHINE_TOKEN` | 该主机 **physical** Machine | `board-client`、systemd、probe、`ai-inspect`、**`proj-*`（本机打开的仓库）** |
 
-发现 loopback ingest 只表示 client 在采集本机；脚本仍直连看板，**禁止**改 skill 身份或借用 client token。advertise `"mode":"tee"` 时，远程成功后再复制事件（含 `workspace`）到 loopback。board-client 把它们投影成 `service_key=proj-{目录名}`：`service.state`、`run.transition`、`log.append`、目录 `status.upsert`。项目根目录优先 git，其次带 `.cursor`/`.codex` 且有项目标记的目录，避免误用家目录上的编辑器配置。终态 `run.transition` 时，client 再往物理机 `board-client` 打一条不带 run_key 的「完成 task」滚动日志（按 run_key 去重）。
+发现 loopback ingest 只表示 client 在采集本机；脚本仍直连看板（有 token 时），**禁止**改 skill 身份或借用 client token。advertise `"mode":"tee"` 时，远程成功后再复制事件（含 `workspace`）到 loopback；无 token 时只 tee。board-client 把它们投影成 `service_key=proj-{目录名}`。终态 `run.transition` 时，client 再往物理机 `board-client` 打一条不带 run_key 的「完成 task」滚动日志（按 run_key 去重）。
 
-本机命令/作业用 `board-client wrap`（`skills/bc-wrapper/SKILL.md`），Run 挂在 `board-client`，**不要**再 `report.py start`。编码会话用本 skill。Cloud Agent 无本机 client 时仍只走 report 直连看板。同一 fixture 不既 wrap 又投影为 proj（skill 约束，代码不做硬锁）。
+本机命令/作业用 `board-client wrap`（`skills/bc-wrapper/SKILL.md`），Run 挂在 `board-client`，**不要**再 `report.py start`。编码会话用本 skill。Cloud Agent 无本机 client 时仍只走 report 直连看板。
 
 | 命令 | Event |
 |---|---|
@@ -1279,18 +1282,19 @@ python3 skills/agentboard-report/scripts/report.py heartbeat "alive"
 | `start` | heartbeat + `run.transition` `running` |
 | `progress` / `log` | `log.append` |
 | `error` | `service.state` + `log.append` + `collector.notice` |
-| `succeed` / `fail` | 终态 `run.transition`；`fail` 同时把服务标 error |
+| `succeed` / `fail` | 终态 `run.transition`；编码 Agent 的 `fail` **不**把整条服务标成 failed |
+| `interrupt` | 同 `fail`，摘要固定为「任务被打断：…」；没有进行中 Run 时不新建 |
 | `notice` / `dead` | 内部故障 / 进程死亡 |
 | `ping` | `GET /ingest/v1/ping` |
 
 触发约定：
 
-- 长程任务（多步实现、部署、排查，约超过 2 分钟）：`start` → `progress` → `succeed`/`fail`
+- 长程任务：`start` → `progress` → `succeed`/`fail`；被打断必须 `interrupt`
 - OpenClaw：session 开始就 `heartbeat`，之后每约 60 秒或每个 turn；TTL 180 秒无心跳则服务显示 stale
-- Cursor：`AGENTBOARD_PROVIDER=cursor`
 - 上报失败不得停下用户任务
+- 编码 Agent 的 `service_type=agent` Run：约 30 分钟无 `log.append` / `log.pin` / `run.transition` 时，服务端标 `failed`，摘要「任务被打断（无后续上报）」。`job`/`daemon`/`scheduled`（含 wrap）仍按约 1 天无日志 `timed_out`
 
-推荐 `service_key`：`cursor` / `codex` / `openclaw`。看板上该 Machine 下会出现对应 Agent 服务。Cursor/Codex **每次 `start` 一条 Run**（`run_key` 为新 UUID；对话 id 只放 metadata）。
+推荐 `service_key`：`cursor` / `codex` / `claude` / `openclaw` / `hermes` / `pi`。Cursor/Codex 等编码 Agent **每次 `start` 一条 Run**（`run_key` 为新 UUID；对话 id 只放 metadata）。
 
 主机上的 `host-inspect` 是 board-client 内嵌的确定性投影 Agent，不是 LLM：自身只上报存活；Docker / cron / nginx / 端口表等整理结果挂到对应服务，不写进 `host-inspect` 的滚动日志。
 
@@ -1650,7 +1654,7 @@ XSS、`javascript:` 链接、外部图片、路径穿越文件名、MIME 伪装�
 5. 不把 Token、密码、Cursor Key、日志正文写入服务端运行日志或 git。
 6. 不使用 shell 字符串拼接执行外部命令。
 7. 上传必须流式处理，Markdown 必须 sanitize，管理写操作必须 CSRF。
-8. Agent 上报失败不得中断用户任务；未设置 AGENTBOARD_TOKEN 时静默跳过。
+8. Agent 上报失败不得中断用户任务；未设置 AGENTBOARD_TOKEN 时跳过远程（本机 tee 仍可投影 proj-*）。
 9. 隐藏离线只允许做前端过滤，不得改 Board API 计数语义。
 10. 发现规格内部矛盾时，先列出矛盾和建议，不要静默选择。
 ```

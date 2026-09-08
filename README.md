@@ -181,28 +181,32 @@ make test-web
 
 **尚未实现（规格 1.0 后续 / M8）：** Playwright E2E；Docker/Caddy 与备份恢复 CLI；通用 `log_tasks` 与 Cursor Cloud Agents API 总结；指标时间桶；Token 日配额；完整清理任务；改密 API。这些不影响当前 1.1 核心链路的运行。完整对照见 [设计规格 §0](docs/agentboard-personal-design-spec.md)。
 
-## Agent 自行上报（Cursor / Codex / OpenClaw）
+## Agent 自行上报（Cursor / Codex / Claude / OpenClaw / Hermes / Pi）
 
 除 `board-client` 采集器外，agent 应自己向 `https://board.yinger650.com` 发 HTTPS ingest，用来观察：
 
 - 长程任务是否做完（`start` → `progress` → `succeed`/`fail`）
+- 被打断（`interrupt`；来不及上报时约 30 分钟后服务端标 failed「任务被打断（无后续上报）」）
 - OpenClaw 是否还活着（周期 `heartbeat`，TTL 默认 180 秒，超时看板显示 **TTL 过期**）
-- OpenClaw / 运行时内部问题（`error` / `dead`）
+
+两把 machine key 可同时推：项目 `AGENTBOARD_TOKEN` → virtual machine；本机 `ABP_MACHINE_TOKEN` → `proj-*`。安装见 [《给编码 Agent 装 AgentBoard 上报》](docs/agent-report-tutorial.md)。
 
 | 产物 | 路径 |
 | --- | --- |
-| Skill（OpenClaw / AgentSkills） | `skills/agentboard-report/SKILL.md` |
+| Skill | `skills/agentboard-report/SKILL.md` |
 | Cursor Skill | `.cursor/skills/agentboard-report/SKILL.md` |
 | Cursor Rule（始终应用） | `.cursor/rules/agentboard-report.mdc` |
-| Codex / Cloud Agent | `AGENTS.md` |
+| Codex / Cloud Agent / Hermes / Pi | `AGENTS.md` |
+| Claude Code | `CLAUDE.md` |
 | 适配说明 | `skills/agentboard-report/adapters/` |
 
 本仓库把 Machine Token 写在根目录 `.env`（已 gitignore，可参考 `.env.example`）。`report.py` 会自动读取。
 
 ```bash
-export AGENTBOARD_PROVIDER=cursor          # cursor | codex | openclaw
+export AGENTBOARD_PROVIDER=cursor          # cursor | codex | claude | openclaw | hermes | pi
 python3 skills/agentboard-report/scripts/report.py start "一句话：正在做什么"
 python3 skills/agentboard-report/scripts/report.py succeed "已完成：结果摘要"
+python3 skills/agentboard-report/scripts/report.py interrupt "用户停止"
 ```
 
-未设置 `AGENTBOARD_TOKEN` 时脚本静默跳过，不得中断用户任务。本机 `board-client` 用自己的 token 报物理机，不能代替本 skill 的 token。不要把 `.env` 提交进 git。
+未设置 `AGENTBOARD_TOKEN` 时：有本机 ingest 则只 tee 到 `proj-*`，否则静默跳过，不得中断用户任务。不要把 `.env` 提交进 git。

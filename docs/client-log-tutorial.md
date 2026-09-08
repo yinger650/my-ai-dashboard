@@ -8,14 +8,14 @@
 
 ## 0. 先分清两条路上报
 
-看板上会出现两类东西，**不要混用**：
+看板上会出现两类东西，**可以同时开**：
 
 | 你想看什么 | 用什么 | 看板上挂在哪 |
 |---|---|---|
 | 这台服务器还活着、CPU、磁盘、网站通不通、本机作业日志 | **board-client**（本教程主体） | 物理机卡片 |
-| Cursor / Codex 正在写代码、任务有没有做完 | `report.py`（文末附录） | 项目 `proj-*` 或虚拟机 |
+| Cursor / Codex / Claude / Hermes / Pi 正在写代码、任务有没有做完 | `report.py`（编码 Agent 教程） | 项目 virtual machine，以及本机 `proj-*` |
 
-同一件任务只选一种。本机训练脚本用 `wrap`；编码 Agent 会话用 `report.py`。
+两把 machine key（项目 virtual 的 `AGENTBOARD_TOKEN` + 本机 `ABP_MACHINE_TOKEN`）会**同时**推同一条编码会话日志。不要混用的是同一件**本机作业**：训练脚本用 `wrap`；编码 Agent 会话用 `report.py`。编码 Agent 的安装见 [《给编码 Agent 装 AgentBoard 上报》](./agent-report-tutorial.md)。
 
 ---
 
@@ -213,7 +213,7 @@ board-client wrap --summary "跑一次备份" --ttl 6h \
 
 1. 配置里勾选 **本机 ingest**（以及如需则 **Agent 日志总结**）。
 2. 仓库 `.env` 里另有一条 **项目** Token（`AGENTBOARD_TOKEN`），这和 client 的 `ABP_MACHINE_TOKEN` 不是同一个。
-3. Agent 用 `report.py start` / `succeed` 上报。本机 client 会再投影一份到 `proj-目录名`。
+3. Agent 用 `report.py start` / `succeed` / `interrupt` 上报。本机 client 会再投影一份到 `proj-目录名`。两把 key 都在时，virtual 卡片和 `proj-*` 会同时有日志。
 
 细节见文末附录。小白若只关心「服务器还活着」，可先跳过。
 
@@ -307,12 +307,15 @@ board-client run --config /etc/agentboard/client.yaml
 
 ## 附录：编码 Agent 自己上报（不是 board-client 配置）
 
-给 Cursor / Codex 用，Token 来自看板上**这个项目的虚拟机**，写在仓库 `.env` 的 `AGENTBOARD_TOKEN`，不要和物理机 `ABP_MACHINE_TOKEN` 混用。
+给 Cursor / Codex / Claude Code / OpenClaw / Hermes / Pi 用。完整安装步骤见 [《给编码 Agent 装 AgentBoard 上报》](./agent-report-tutorial.md)。
+
+Token 来自看板上**这个项目的虚拟机**，写在仓库 `.env` 的 `AGENTBOARD_TOKEN`，不要和物理机 `ABP_MACHINE_TOKEN` 混成一把。两把都在时日志会同时出现在 virtual 卡片和本机 `proj-*`。
 
 ```bash
 export AGENTBOARD_PROVIDER=cursor
 python3 skills/agentboard-report/scripts/report.py start "正在做什么"
 python3 skills/agentboard-report/scripts/report.py succeed "做完了：结果"
+python3 skills/agentboard-report/scripts/report.py interrupt "用户停止"
 ```
 
-未设置 Token 时脚本会静默跳过，不会打断你干活。本机若同时开着 board-client 且勾了本机 ingest，看板上物理机下还会多一张 `proj-仓库名` 卡片，那是 client 投影的，不是 skill 改了身份。
+未设置项目 Token 时脚本会静默跳过远程；若本机 ingest 开着，仍会投影到 `proj-仓库名`。
