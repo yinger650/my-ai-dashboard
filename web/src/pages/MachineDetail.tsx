@@ -205,8 +205,10 @@ export function MachineDetailPage() {
             aria-label={logOpen ? "隐藏日志" : "打开日志"}
             onClick={() => setLogOpen((v) => !v)}
             className={cn(
-              "fixed top-[38%] z-40 inline-flex items-center gap-1 rounded-l-md border border-r-0 border-[#1f2a44] bg-[#0f1626] px-1.5 py-3 text-xs text-slate-300 shadow-lg transition hover:bg-slate-800 hover:text-white",
-              logOpen ? "right-[min(100vw-2.75rem,28rem)]" : "right-0",
+              "fixed top-[38%] z-40 inline-flex items-center gap-1 rounded-l-md border border-r-0 px-1.5 py-3 text-xs font-medium text-white shadow-lg shadow-indigo-500/40 transition",
+              logOpen
+                ? "right-[min(100vw-2.75rem,28rem)] border-indigo-300 bg-indigo-500 hover:bg-indigo-400"
+                : "right-0 border-indigo-400 bg-indigo-600 hover:bg-indigo-500",
             )}
           >
             <ScrollText className="h-3.5 w-3.5" />

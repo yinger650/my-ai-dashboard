@@ -201,6 +201,7 @@ describe("MachineDetailPage logs layout", () => {
     expect(await screen.findByRole("heading", { name: "测试机" })).toBeInTheDocument();
 
     const toggle = await screen.findByRole("button", { name: "打开日志" });
+    expect(toggle.className).toContain("bg-indigo-600");
     const pane = document.getElementById("machine-logs");
     expect(pane).toHaveAttribute("aria-hidden", "true");
     expect(pane).toHaveClass("translate-x-full");
