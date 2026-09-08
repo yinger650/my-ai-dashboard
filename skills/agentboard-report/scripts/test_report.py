@@ -137,6 +137,57 @@ class ReportScenarios(unittest.TestCase):
         run = next(e for e in body["events"] if e["event_type"] == "run.transition")
         self.assertEqual(run["payload"]["status"], "failed")
 
+    def test_interrupt_prefixes_message(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            extra = {
+                "AGENTBOARD_SCENARIO": "project",
+                "AGENTBOARD_STATE_DIR": td,
+                "CURSOR_CONVERSATION_ID": "abababab-1111-2222-3333-444444444444",
+            }
+            start = run_report("start", "正在改上报", extra_env=extra)
+            rk = next(e for e in start["events"] if e["event_type"] == "run.transition")["run_key"]
+            body = run_report("interrupt", "用户停止", extra_env=extra)
+            run = next(e for e in body["events"] if e["event_type"] == "run.transition")
+            self.assertEqual(run["run_key"], rk)
+            self.assertEqual(run["payload"]["status"], "failed")
+            self.assertEqual(run["payload"]["summary"], "任务被打断：用户停止")
+            log = next(e for e in body["events"] if e["event_type"] == "log.append")
+            self.assertEqual(log["payload"]["markdown"], "任务被打断：用户停止")
+            states = [e for e in body["events"] if e["event_type"] == "service.state"]
+            self.assertTrue(states)
+            self.assertNotEqual(states[0]["payload"]["state"], "failed")
+
+    def test_interrupt_without_run_is_empty(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            body = run_report(
+                "interrupt",
+                "无任务",
+                extra_env={
+                    "AGENTBOARD_SCENARIO": "project",
+                    "AGENTBOARD_STATE_DIR": td,
+                    "CURSOR_CONVERSATION_ID": "ffffffffffff-0000-1111-2222-333333333333",
+                },
+            )
+            self.assertEqual(body.get("events"), [])
+
+    def test_interrupt_keeps_existing_prefix(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            extra = {
+                "AGENTBOARD_SCENARIO": "project",
+                "AGENTBOARD_STATE_DIR": td,
+                "CURSOR_CONVERSATION_ID": "cdcdeeee-1111-2222-3333-444444444555",
+            }
+            run_report("start", "任务", extra_env=extra)
+            body = run_report("interrupt", "任务被打断：会话超时", extra_env=extra)
+            run = next(e for e in body["events"] if e["event_type"] == "run.transition")
+            self.assertEqual(run["payload"]["summary"], "任务被打断：会话超时")
+
     def test_progress_updates_run_summary(self):
         body = run_report(
             "progress",
@@ -225,6 +276,100 @@ class HostProjectCopy(unittest.TestCase):
             "http://127.0.0.1:9",
         )
         self.assertEqual(reportmod.local_tee_candidate("http://127.0.0.1:7438", "", "http://127.0.0.1:9"), "")
+
+
+class ProviderInfer(unittest.TestCase):
+    def test_infer_claude_hermes_pi(self):
+        sys.path.insert(0, str(SCRIPT.parent))
+        import report as reportmod  # noqa: E402
+
+        old = os.environ.copy()
+        try:
+            for k in list(os.environ):
+                if k.startswith(("AGENTBOARD_", "OPENCLAW_", "CODEX_", "CURSOR_", "CLAUDE", "HERMES_", "PI_")):
+                    os.environ.pop(k, None)
+            os.environ["CLAUDECODE"] = "1"
+            self.assertEqual(reportmod.infer_provider(), "claude")
+            os.environ.pop("CLAUDECODE")
+            os.environ["HERMES_HOME"] = "/tmp/hermes"
+            self.assertEqual(reportmod.infer_provider(), "hermes")
+            os.environ.pop("HERMES_HOME")
+            os.environ["PI_HOME"] = "/tmp/pi"
+            self.assertEqual(reportmod.infer_provider(), "pi")
+            key, name = reportmod.provider_service_defaults("claude")
+            self.assertEqual(key, "claude")
+            self.assertEqual(name, "Claude Code")
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+
+class LocalTeeWithoutToken(unittest.TestCase):
+    def test_no_token_still_tees_when_advertise_tee(self):
+        import http.server
+        import tempfile
+        import threading
+
+        received: list[bytes] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or "0")
+                received.append(self.rfile.read(n))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+
+            def log_message(self, *_args):
+                return
+
+        httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        port = httpd.server_address[1]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                adv = Path(td) / "local-ingest.json"
+                adv.write_text(
+                    json.dumps({"url": f"http://127.0.0.1:{port}", "mode": "tee"}),
+                    encoding="utf-8",
+                )
+                env = os.environ.copy()
+                env.update(
+                    {
+                        "AGENTBOARD_PROVIDER": "cursor",
+                        "AGENTBOARD_TOKEN": "",
+                        "AGENTBOARD_SOFT_FAIL": "1",
+                        "AGENTBOARD_LOCAL_INGEST_FILE": str(adv),
+                        "AGENTBOARD_STATE_DIR": td,
+                        "CURSOR_CONVERSATION_ID": "tee-no-token-0000-1111-2222-333333333333",
+                    }
+                )
+                proc = subprocess.run(
+                    [sys.executable, str(SCRIPT), "start", "仅本机 ingest"],
+                    cwd=str(ROOT),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(proc.returncode, 0)
+                self.assertIn("local tee only", proc.stderr)
+                self.assertTrue(received, proc.stderr)
+                body = json.loads(received[0])
+                types = [e["event_type"] for e in body["events"]]
+                self.assertIn("run.transition", types)
+                meta = body["events"][0]["payload"].get("metadata") or {}
+                self.assertIn("workspace", meta)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
 
 
 if __name__ == "__main__":

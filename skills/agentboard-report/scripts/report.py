@@ -5,8 +5,9 @@ Uses AGENTBOARD_TOKEN (the skill / virtual-machine key). Independent of
 board-client on the same host: that process reports the physical machine
 with its own token, including proj-* copies of local workspace activity.
 
-If AGENTBOARD_TOKEN is unset, exits 0 without sending (agents must not
-fail the task). A local board-client is not a substitute for the token.
+If AGENTBOARD_TOKEN is unset, remote ingest is skipped. When a local
+board-client advertise file has mode=tee, events are still copied to
+loopback for proj-* projection. Agents must not fail the user task.
 """
 from __future__ import annotations
 
@@ -99,6 +100,12 @@ def infer_provider() -> str:
         return env("AGENTBOARD_PROVIDER")
     if env("OPENCLAW_HOME") or env("OPENCLAW_STATE_DIR") or env("OPENCLAW_PROFILE"):
         return "openclaw"
+    if env("CLAUDECODE") or env("CLAUDE_CODE") or env("CLAUDE_CODE_ENTRYPOINT"):
+        return "claude"
+    if env("HERMES_HOME") or env("HERMES_PROFILE") or env("HERMES_AGENT"):
+        return "hermes"
+    if env("PI_HOME") or env("PI_CODING_AGENT") or env("PI_AGENT_DIR"):
+        return "pi"
     if env("CODEX_HOME") or env("CODEX_THREAD_ID"):
         return "codex"
     if env("CURSOR_AGENT") or env("CURSOR_TRACE_ID") or env("CURSOR_CLOUD_AGENT"):
@@ -271,6 +278,9 @@ def provider_service_defaults(provider: str) -> tuple[str, str]:
         "cursor": ("cursor", "Cursor Agent"),
         "codex": ("codex", "Codex"),
         "openclaw": ("openclaw", "OpenClaw"),
+        "claude": ("claude", "Claude Code"),
+        "hermes": ("hermes", "Hermes"),
+        "pi": ("pi", "Pi"),
         "agent": ("agent", "Agent"),
     }
     return defaults.get(provider, defaults["agent"])
@@ -453,6 +463,15 @@ def heartbeat_events(
     return events
 
 
+def interrupt_text(summary: str) -> str:
+    text = (summary or "").strip()
+    if text.startswith("任务被打断"):
+        return text
+    if not text:
+        return "任务被打断"
+    return "任务被打断：" + text
+
+
 def log_append(service_key: str, provider: str, markdown: str, severity: str, run_key: str) -> dict:
     return envelope(
         "log.append",
@@ -552,9 +571,15 @@ def build_events(
             events.append(log_append(service_key, provider, text, "info", rk))
         return events
 
-    if cmd == "fail":
-        rk = resolve_run_key(args, provider, service_key, coding, create=True)
-        text = summary or "failed"
+    if cmd in ("fail", "interrupt"):
+        create = cmd != "interrupt"
+        rk = resolve_run_key(args, provider, service_key, coding, create=create)
+        if cmd == "interrupt":
+            if not rk:
+                return []
+            text = interrupt_text(summary)
+        else:
+            text = summary or "failed"
         events: list[dict] = []
         if coding:
             events.extend(heartbeat_events(service_key, name, provider, "", ttl, meta))
@@ -614,7 +639,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Report agent status to AgentBoard")
     p.add_argument(
         "command",
-        choices=["ping", "heartbeat", "start", "progress", "log", "error", "succeed", "fail", "notice", "dead"],
+        choices=["ping", "heartbeat", "start", "progress", "log", "error", "succeed", "fail", "interrupt", "notice", "dead"],
     )
     p.add_argument("message", nargs="?", default="")
     p.add_argument("--severity", default="info")
@@ -661,14 +686,20 @@ def main() -> int:
             print(f"agentboard-report: ping failed: {e}", file=sys.stderr)
             return 0
 
-    if not args.dry_run and not token:
-        return 0
-
     events = build_events(args.command, args, service_key, name, provider, extra_meta, coding)
-    rc = post(url, token, events, args.timeout, args.dry_run)
-    if not args.dry_run and rc == 0:
-        tee_to_local_ingest(events)
-    return rc
+    if args.dry_run:
+        return post(url, token, events, args.timeout, True)
+    if not events:
+        return 0
+    if token:
+        rc = post(url, token, events, args.timeout, False)
+        if rc == 0:
+            tee_to_local_ingest(events)
+        return rc
+    tee_to_local_ingest(events)
+    if discover_local_tee():
+        sys.stderr.write("agentboard-report: AGENTBOARD_TOKEN unset; remote skipped, local tee only\n")
+    return 0
 
 
 if __name__ == "__main__":
