@@ -43,8 +43,10 @@ func TestBuildPromptTypedProbeContracts(t *testing.T) {
 		task string
 		want []string
 	}{
-		{"service_probe_script", []string{"docker exec", "单个 JSON 对象", "禁止修改服务"}},
-		{"http_probe_config", []string{"expect_status", "GET 或 HEAD", "无用户名密码"}},
+		{"probe_spec", []string{"探测规格", "# AgentBoard 探测规格", "一次性"}},
+		{"probe_script", []string{"探测规格", "窄 JSON", "禁止 curl/wget"}},
+		{"service_probe_script", []string{"探测规格", "docker exec", "单个 JSON 对象", "禁止修改服务"}},
+		{"http_probe_config", []string{"探测规格", "expect_status", "GET 或 HEAD", "无用户名密码"}},
 	} {
 		t.Run(tc.task, func(t *testing.T) {
 			p := BuildPrompt(Request{Task: tc.task, Untrusted: "用户输入 curl http://bad.example"})

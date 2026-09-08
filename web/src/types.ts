@@ -87,6 +87,13 @@ export interface Board {
   poll_interval_seconds?: number;
   layout?: unknown;
   public_url?: string;
+  card_pin_keys?: string[] | null;
+  pin_candidates?: PinCandidate[] | null;
+}
+
+export interface PinCandidate {
+  service_key: string;
+  name: string;
 }
 
 export interface Machine {

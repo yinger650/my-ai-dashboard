@@ -169,7 +169,7 @@ ssh -L 7439:127.0.0.1:7439 你的用户@这台机器
 
 ### 想用一句话添加特殊采集
 
-在 TUI/WEB 的 **自然语言扩展** 中添加，不需要自己写脚本。先勾选 **AI 总开关**，并在 `/etc/agentboard/board-client.env` 加入：
+在 TUI/WEB 的 **自然语言扩展** 中展开一条，不需要自己写脚本。先勾选 **AI 总开关**，并在 `/etc/agentboard/board-client.env` 加入：
 
 ```bash
 CURSOR_API_KEY=你的CursorAgentKey
@@ -177,7 +177,7 @@ CURSOR_API_KEY=你的CursorAgentKey
 
 然后 `sudo systemctl restart board-client`。Key 只给这台机器上的 `cursor-agent`，不要写入 YAML、git 或看板。
 
-每条扩展先选类型：
+每条扩展：填 `key`、类型、名称、采集间隔和过期时间 → 在「请输入你的想法」里描述需求 → **Build**（按钮旁 building）→ 旁边点 **预览**，返回值在按钮下方。完整规格只读显示在「自然语言描述」。成功后才能勾选启用，最后保存。
 
 | 类型 | 适合什么 | 例子 |
 |---|---|---|
@@ -185,7 +185,9 @@ CURSOR_API_KEY=你的CursorAgentKey
 | `service` | 单独显示成一条服务 | 「通过 `docker exec` 检查 `web` 容器里的 nginx」 |
 | `http` | HTTP(S) 健康检查 | 「检查 `http://127.0.0.1:18080/health`，期望 200」 |
 
-填写 `key`（例如 `data-stats`）、类型、显示名和中文描述；涉及目录时再填绝对 `path`。保存后 client 会在本机让 Cursor Agent 生成并试跑一次，成功后缓存产物。以后每轮采集不调用 AI；Cursor 暂时不可用时仍运行最后一个有效版本。
+Build 产物在本机 `extensions/nl/<key>/`（与手写 `extensions/custom/` 同级）。保存后 daemon reload；缓存命中不再调用 AI。Cursor 暂时不可用时仍运行最后一个有效版本。
+
+**直接改 YAML** 不要写 `intent`。把脚本放到 `extensions/custom/<key>/probe.sh`，用 `command` 或 `collectors.probes.scripts` / `collectors.http.targets`。给 agent 的步骤见 `skills/board-client-extension/SKILL.md`。
 
 安全限制：自动脚本不能用 `curl/wget`、不能读取上报 Token、不能调用 ingest。`http` 类型会生成受限的结构化配置并交给内置 HTTP 探测器，不生成 curl 脚本。
 

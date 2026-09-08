@@ -307,6 +307,55 @@ machine:
 	}
 }
 
+func TestStatusProbeEnabledDirAndHistory(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	t.Setenv("TEST_TOKEN_VAR", "abp_m_secret")
+	ext := filepath.Join(dir, "ext")
+	src := `version: 1
+server:
+  url: "http://127.0.0.1:8080"
+  machine_token_env: "TEST_TOKEN_VAR"
+machine:
+  key: "home-server"
+  status_probes:
+    - key: gpu
+      intent: "NVIDIA GPU 利用率 0-100"
+      enabled: false
+      intent_history:
+        - "第一版"
+      dir: nl/gpu
+storage:
+  spool_path: "` + filepath.Join(dir, "spool.db") + `"
+  extensions_path: "` + ext + `"
+`
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ExtensionsRoot() != ext {
+		t.Fatalf("ext=%s", c.ExtensionsRoot())
+	}
+	got := c.Machine.StatusProbes[0]
+	if got.IsEnabled() {
+		t.Fatal("enabled false")
+	}
+	if got.Dir != "nl/gpu" || len(got.IntentHistory) != 1 {
+		t.Fatalf("%+v", got)
+	}
+	if c.ResolveProbeDir(got) != filepath.Join(ext, "nl", "gpu") {
+		t.Fatalf("resolve=%s", c.ResolveProbeDir(got))
+	}
+	s := StatusProbe{Intent: "a"}
+	s.Supplement("b")
+	if s.Intent != "a\nb" || len(s.IntentHistory) != 1 || s.IntentHistory[0] != "a" {
+		t.Fatalf("supplement=%+v", s)
+	}
+}
+
 func TestStatusProbesIntentOrCommand(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "client.yaml")

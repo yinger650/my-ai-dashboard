@@ -20,11 +20,13 @@ export function MachineCard({
   autoRefresh,
   pollMs,
   editMode,
+  extraPinKeys = [],
 }: {
   m: BoardMachine;
   autoRefresh: boolean;
   pollMs: number;
   editMode?: boolean;
+  extraPinKeys?: string[];
 }) {
   const offline = m.health === "offline";
   const lm = m.latest_metric;
@@ -105,6 +107,7 @@ export function MachineCard({
         initialLogs={m.recent_logs ?? []}
         initialPinned={m.pinned_logs ?? []}
         compact
+        extraPinKeys={extraPinKeys}
         onLogsChange={onLogsChange}
       />
 

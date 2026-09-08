@@ -56,5 +56,6 @@ describe("card log filters", () => {
       { markdown: "agent", severity: "info", occurred_at: "", service_key: "cursor-agent" },
     ];
     expect(compactCardPins(pins).map((p) => p.service_key)).toEqual(["host-listen"]);
+    expect(compactCardPins(pins, ["cursor-agent"]).map((p) => p.service_key)).toEqual(["host-listen", "cursor-agent"]);
   });
 });

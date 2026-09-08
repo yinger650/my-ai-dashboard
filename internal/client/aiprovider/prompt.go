@@ -36,18 +36,23 @@ func BuildPrompt(req Request) string {
 		b.WriteString("。\n")
 	case "report":
 		b.WriteString("任务：根据第一轮清单和第二轮追查输出，写一份中文运维巡检报告。先结论，再列异常服务与建议。\n")
+	case "probe_spec":
+		b.WriteString("任务：把用户想法整理成一份完整的探测规格，让任意编码模型都能一次性实现。只输出规格正文，不要解释，不要包一层闲聊。\n")
+		b.WriteString("必须使用以下固定标题（# AgentBoard 探测规格 / ## 元数据 / ## 要做什么 / ## 输出 / ## 约束），按用户想法填满每一节。\n")
+		b.WriteString("规格必须写清：脚本做什么、stdout JSON 每个 statuses 的 key/label/unit、失败时如何输出。http 类型写 URL 与期望状态码，不要写脚本。\n")
+		b.WriteString("禁止在规格里要求 curl/wget、读取 token、调用 ingest 或修改服务。\n")
 	case "probe_script":
-		b.WriteString("任务：根据意图写一段 POSIX sh 脚本。只输出脚本本身，不要解释，不要 Markdown。\n")
+		b.WriteString("任务：根据探测规格写一段 POSIX sh 脚本。规格已结构化，按其中「输出」与「约束」一次性实现。只输出脚本本身，不要解释，不要 Markdown。\n")
 		b.WriteString("脚本 stdout 必须是窄 JSON：")
 		b.WriteString(`{"state":"running","summary":"...","severity":"normal","statuses":[{"key":"...","label":"...","value":"数字","unit":"%"}]}`)
 		b.WriteString("。value 以数字为主。禁止 curl/wget、禁止读 token 环境变量、禁止调用 ingest、禁止 shell 拼接不可信输入。\n")
 	case "service_probe_script":
-		b.WriteString("任务：根据意图写一段只读 POSIX sh 服务探测脚本。只输出脚本本身，不要解释，不要 Markdown。\n")
+		b.WriteString("任务：根据探测规格写一段只读 POSIX sh 服务探测脚本。规格已结构化，按其中「输出」与「约束」一次性实现。只输出脚本本身，不要解释，不要 Markdown。\n")
 		b.WriteString("脚本 stdout 必须是单个 JSON 对象：")
 		b.WriteString(`{"state":"running","summary":"...","severity":"normal","statuses":[{"key":"...","label":"...","value":"...","unit":""}],"logs":[],"pinned_markdown":""}`)
 		b.WriteString("。可用 docker exec 等只读查询命令；禁止修改服务、curl/wget、读取 token 环境变量、调用 ingest、shell 拼接不可信输入。\n")
 	case "http_probe_config":
-		b.WriteString("任务：把自然语言健康检查转换成 HTTP 探测配置。只输出 JSON，不要 Markdown，不要解释。\n")
+		b.WriteString("任务：根据探测规格生成 HTTP 探测配置。只输出 JSON，不要 Markdown，不要解释。\n")
 		b.WriteString("格式：")
 		b.WriteString(`{"url":"http://127.0.0.1:8080/health","method":"GET","expect_status":[200],"expect_contains":""}`)
 		b.WriteString("。url 只能是无用户名密码的 http/https 绝对地址；method 只能 GET 或 HEAD；状态码必须在 100-599。\n")
@@ -55,9 +60,15 @@ func BuildPrompt(req Request) string {
 		b.WriteString("任务：总结下面的日志，指出最可能的故障或进展，给出一条处置建议。\n")
 	}
 	if extra := strings.TrimSpace(req.UserPrompt); extra != "" {
-		b.WriteString("用户补充要求：")
-		b.WriteString(extra)
-		b.WriteString("\n")
+		if req.Task == "probe_spec" {
+			b.WriteString("规格模板：\n")
+			b.WriteString(extra)
+			b.WriteString("\n")
+		} else {
+			b.WriteString("用户补充要求：")
+			b.WriteString(extra)
+			b.WriteString("\n")
+		}
 	}
 	if req.WantJSON && req.Task != "triage" {
 		b.WriteString("只输出 JSON，不要其它文字。\n")

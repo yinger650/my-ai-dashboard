@@ -20,6 +20,7 @@ export function MachineLogStream({
   initialLogs,
   initialPinned,
   compact = false,
+  extraPinKeys = [],
   onLogsChange,
 }: {
   machineId: string;
@@ -28,10 +29,12 @@ export function MachineLogStream({
   initialLogs: LogEntry[];
   initialPinned: PinnedLog[];
   compact?: boolean;
+  extraPinKeys?: string[];
   onLogsChange?: (logs: LogEntry[]) => void;
 }) {
+  const extraKeySig = extraPinKeys.join("\0");
   const filterLogs = (rows: LogEntry[]) => (compact ? rows.filter((l) => !isCardNoiseLog(l)) : rows);
-  const filterPins = (rows: PinnedLog[]) => (compact ? compactCardPins(rows) : rows);
+  const filterPins = (rows: PinnedLog[]) => (compact ? compactCardPins(rows, extraPinKeys) : rows);
   const [logs, setLogs] = useState<LogEntry[]>(() => filterLogs(initialLogs));
   const [pinned, setPinned] = useState<PinnedLog[]>(() => filterPins(initialPinned));
   const [cursor, setCursor] = useState<string | null>(
@@ -87,7 +90,7 @@ export function MachineLogStream({
         setNewCount(0);
       }
     },
-    [machineId, compact],
+    [machineId, compact, extraKeySig],
   );
 
   useEffect(() => {

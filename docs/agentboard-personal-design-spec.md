@@ -6,7 +6,7 @@
 >
 > 更新日期：2026-09-03
 >
-> 基线：1.0（2026-08-18，见 [archive/agentboard-personal-design-spec-v1.0.md](archive/agentboard-personal-design-spec-v1.0.md)）；1.1 为 2026-08-26 对照实现修订；1.2 为 2026-08-31 AI 总结 / 巡检 / probe；1.3 为升级后配置勾选；1.4 为自然语言扩展采集
+> 基线：1.0（2026-08-18，见 [archive/agentboard-personal-design-spec-v1.0.md](archive/agentboard-personal-design-spec-v1.0.md)）；1.1 为 2026-08-26 对照实现修订；1.2 为 2026-08-31 AI 总结 / 巡检 / probe；1.3 为升级后配置勾选；1.4 为自然语言扩展采集（配置 UI 展开 / Build / 预览 / 启停与 `extensions/` 目录）
 >
 > 对应仓库版本：`board-server` / `board-client` **0.1.10**（`Makefile` `VERSION`）；客户端心跳上报 `collector_version` 为 **1.3.1**
 >
@@ -366,7 +366,7 @@ board-server version
 
 表与 1.0 一致：`settings`、`admin_credentials`、`admin_sessions`、`machines`、`services`、`api_tokens`、`runs`、`events`、`metric_samples`、`current_status`、`pinned_logs`、`artifacts`、`access_logs`、`token_daily_usage`。
 
-必须存在的设置键：`board_title`、`timezone`、`poll_interval_seconds`、`board_layout`。阈值键（`cpu_warn` 等）可写入 settings，**现行健康计算尚未读取它们**。
+必须存在的设置键：`board_title`、`timezone`、`poll_interval_seconds`、`board_layout`、`card_pin_keys`。阈值键（`cpu_warn` 等）可写入 settings，**现行健康计算尚未读取它们**。
 
 `api_tokens` 相对 1.0 增加：
 
@@ -660,7 +660,7 @@ TOTP 未启用时忽略 `totp_code`。启用后未提供验证码返回 `totp_re
 
 需要管理员会话。返回：
 
-- `title`、`poll_interval_seconds`、`layout`（`board_layout`）、`public_url`、`server_time`
+- `title`、`poll_interval_seconds`、`layout`（`board_layout`）、`card_pin_keys`、`pin_candidates`、`public_url`、`server_time`
 - `recent_abnormal`：最近 1 小时异常访问条数
 - `machines[]`：每台未删除且启用的机器
   - 基础信息与计算后的 `health` / `resource_severity`
@@ -754,7 +754,7 @@ Viewer Token 只能调用 GET 查询接口和 `board.txt`。禁止用 `abp_v_` �
 - `GET /health/live`：进程存活，返回纯文本 `ok`，不查数据库
 - `GET /health/ready`：现行只检查数据库 ping，返回 `ok` 或 `not_ready`；1.0 要求的 Artifact 目录可写检查尚未做
 
-可 PATCH 的设置包括：`board_title`、`timezone`、`poll_interval_seconds`、`board_layout`（网格）、以及阈值/保留键（存储后健康计算尚未使用阈值）。
+可 PATCH 的设置包括：`board_title`、`timezone`、`poll_interval_seconds`、`board_layout`（网格）、`card_pin_keys`（首页卡片额外置顶 service_key）、以及阈值/保留键（存储后健康计算尚未使用阈值）。
 
 ### 12.10 HTTP 状态码和错误码
 
@@ -1184,7 +1184,15 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 | `service` | Docker 容器内 nginx、特殊只读命令 | POSIX sh，stdout 为完整 `probe.Result` JSON | `probe.MapJSON` 投影为独立 virtual Service |
 | `http` | 本机或远端 HTTP(S) 健康检查 | `{url,method,expect_status,expect_contains}` JSON | 复用 HTTP collector 的 state/status/转换日志 |
 
-编译只在 client 启动/reload 后进行。缓存 hash 包含 `kind + intent + path`；hash 命中时不调用 AI。新产物必须先通过静态检查、schema 校验和试运行，再原子替换。生成失败、AI 不可用或新产物试跑失败时继续使用最后一个有效缓存；没有缓存则发 `status_probe_skipped` / `status_probe_failed` notice 后跳过，不阻塞主 HostSnapshot。
+编译在 TUI/WEB **Build** 或 client 启动/reload 后进行。缓存 hash 包含 `kind + intent + path + intent_history`；hash 命中时不调用 AI。新产物必须先通过静态检查、schema 校验和试运行，再原子替换。生成失败、AI 不可用或新产物试跑失败时继续使用最后一个有效缓存；没有缓存则发 `status_probe_skipped` / `status_probe_failed` notice 后跳过，不阻塞主 HostSnapshot。
+
+产物目录默认 `dirname(spool_path)/extensions`（`storage.extensions_path` 可覆盖）。`nl/<key>/` 与手写 `custom/<key>/` 为兄弟目录：
+
+- `nl/<key>/probe.sh` 或 `http.json`、`meta.json`、`preview.json`：TUI/WEB Build 写入
+- `custom/<key>/probe.sh`：直接改 YAML 时由用户或 agent 放置（见 `skills/board-client-extension`）
+- 旧扁平 `dirname(spool_path)/probes/<key>.sh` 只读回退
+
+YAML 字段：`enabled`（缺省开启；`false` 跳过编译与采集）、`intent`（完整探测规格，由 Build 从用户「想法」生成，用户可改后再 Build）、`intent_history`（历次规格，只追加）、`dir`（相对 extensions 根，通常 `nl/<key>`）。Build 成功后 metric/service 同时写入 `command` 指向 `probe.sh`；http 不写 shell `command`。
 
 安全边界：
 
@@ -1194,7 +1202,7 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 4. `service` / `http` 只能投影到本条配置的 `key`，模型输出不能选择 `service_key`。配置删除后 metric 用 `null` 清 stale；service/http 依 TTL 变 stale。
 5. 看板 server 与 WEB 均不得创建、修改或下发该配置及命令。
 
-TUI/WEB 将该列表显示为「自然语言扩展」，字段为 key、kind、name、intent、可选 path、interval、TTL；原 `collectors.http.targets` 与 `collectors.probes.scripts` 继续作为手写高级入口保留。
+TUI/WEB 将每条自然语言扩展显示为可展开卡片：key / 类型 / 名称 / 采集间隔 / 过期时间在上方；「自然语言描述」为完整探测规格（只读）；其下「请输入你的想法」。**Build** 与 **预览** 并排，试跑 JSON 显示在按钮下方。点 Build 后按钮旁显示 building 与转圈。Build 先调用模型把想法整理成固定格式的探测规格（元数据 / 要做什么 / 输出 JSON / 约束，见 `skills/board-client-extension`），写入只读 `intent`，再按该规格一次性生成脚本或 HTTP 配置。Build 成功后才能启用/停用。保存 overlay 才把 `enabled` 等写入 YAML 并 reload。直接编辑 YAML **不应当**新写 `intent`；用手写 `command`（落在 `extensions/custom/`）或原 `collectors.http.targets` / `collectors.probes.scripts`。Load 仍接受已有带 `intent` 的文件。给 agent 的说明见 `skills/board-client-extension`。
 
 ## 15. Cursor 与 Agent 集成
 
@@ -1238,6 +1246,7 @@ Agent **自己**发 HTTPS ingest，不是 `board-client`。
 |---|---|
 | Skill | `skills/agentboard-report/SKILL.md` |
 | wrap | `skills/bc-wrapper/SKILL.md` |
+| 自定义扩展 | `skills/board-client-extension/SKILL.md` |
 | 协议 | `skills/agentboard-report/references/protocol.md` |
 | 脚本 | `skills/agentboard-report/scripts/report.py` |
 | Cursor Rule | `.cursor/rules/agentboard-report.mdc` |
@@ -1350,6 +1359,8 @@ Health 文案：在线 / 离线 / 延迟（stale）/ 降级 / 未知 / 已禁用
 #### 16.3.3 Machine Card
 
 必须显示：名称、`kind`、`machine_key`、health、最后上报、CPU / 内存 / 磁盘、网络 ↓/↑、服务 severity 计数、**有用的**状态列表、日志流。
+
+首页卡片置顶条默认只显示 `host-listen` / `nginx` / `docker` / `cron`。额外 service_key 由设置页勾选，写入 `settings.card_pin_keys`（不是 client YAML）。`GET /api/v1/board` 的 `pin_candidates` 列出当前有置顶或虚拟服务的其它 key。
 
 离线卡片降低不透明度，页脚前缀「最后数据」，不能让用户误以为是实时值。
 
@@ -1563,7 +1574,7 @@ Artifact 上传前检查配额。数据库无法写入时 `/health/ready` 必须
 
 **（1.3）** 配置目录 / overlay 必须覆盖：现有 yaml 的开关解读；新 id 判定；seed 只在子树为空时写入；保留注释与自定义列表；不把 `applyDefaults` 的 systemd include 写进原本没有该段的文件；token 空提交不覆盖；未审功能发日志、保存后不再重复。
 
-**（1.4）** 自然语言扩展必须覆盖：旧配置默认 metric；kind 与字段校验；不同 kind 改变 hash 并重编译；缓存命中不调用 AI；坏脚本/JSON/HTTP 配置回退旧产物；HTTP URL/方法/状态码限制；metric stale 清理；service 仅投影自己的 key；HTTP 成功、失败、恢复；TUI/WEB overlay 保留未知 YAML。真模型与真实外部 HTTP 测试仍须环境变量 gate。
+**（1.4）** 自然语言扩展必须覆盖：旧配置默认 metric；kind 与字段校验；不同 kind 改变 hash 并重编译；intent_history 改变 hash；缓存命中不调用 AI；坏脚本/JSON/HTTP 配置回退旧产物；HTTP URL/方法/状态码限制；metric stale 清理；service 仅投影自己的 key；HTTP 成功、失败、恢复；TUI/WEB overlay 保留未知 YAML；`enabled: false` 不进入 Ready；Build 产物进 `extensions/nl/<key>/` 且写出 preview；旧扁平 `probes/` 只读回退。真模型与真实外部 HTTP 测试仍须环境变量 gate。
 
 ### 21.2 前端
 

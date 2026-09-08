@@ -114,6 +114,7 @@ Usage:
 
 Token: non-empty $ABP_MACHINE_TOKEN overrides server.machine_token in YAML.
 config tui/web inherit key and server.url, toggle built-in features, and keep custom lists.
+Natural-language extensions expand, Build, preview, then enable. Hand-edited YAML should use custom scripts, not intent.
 status_probe scripts are compiled locally; the board never sends commands.
 wrap and agentboard-report are mutually exclusive for the same task.
 `, version)
@@ -222,11 +223,15 @@ machine:
   display_name: "家庭服务器"
   status_probes:
     - key: gpu
+      kind: metric
       intent: "NVIDIA GPU 利用率 0-100"
+      dir: nl/gpu
     - key: data_dir
+      kind: metric
       intent: "/data 占用百分比"
       path: /data
       interval: 60s
+      dir: nl/data_dir
 
 storage:
   spool_path: "/var/lib/agentboard-client/spool.db"

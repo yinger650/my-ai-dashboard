@@ -11,7 +11,14 @@ const CARD_SERVICE_ORDER = [
   "board-client",
 ];
 
-const CARD_PIN_KEYS = new Set(["host-listen", "nginx", "docker", "cron"]);
+export const DEFAULT_CARD_PINS = [
+  { key: "host-listen", name: "监听端口" },
+  { key: "nginx", name: "Nginx" },
+  { key: "docker", name: "Docker" },
+  { key: "cron", name: "Cron" },
+] as const;
+
+const CARD_PIN_KEYS = new Set(DEFAULT_CARD_PINS.map((p) => p.key));
 
 export function compactCardServices(
   services: BoardService[],
@@ -33,6 +40,7 @@ export function isCardNoiseLog(l: LogEntry): boolean {
   return l.source === "cron" || l.service_key === "cron";
 }
 
-export function compactCardPins(pins: PinnedLog[]): PinnedLog[] {
-  return pins.filter((p) => !p.service_key || CARD_PIN_KEYS.has(p.service_key));
+export function compactCardPins(pins: PinnedLog[], extraKeys: string[] = []): PinnedLog[] {
+  const extra = new Set(extraKeys);
+  return pins.filter((p) => !p.service_key || CARD_PIN_KEYS.has(p.service_key) || extra.has(p.service_key));
 }

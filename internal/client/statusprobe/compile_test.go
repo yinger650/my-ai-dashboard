@@ -72,8 +72,15 @@ func TestPrepareCompilesAndReusesHash(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("ready=%d", len(got))
 	}
+	want := filepath.Join(dir, "nl", "gpu", "probe.sh")
+	if got[0].Command[0] != want {
+		t.Fatalf("script=%s want=%s", got[0].Command[0], want)
+	}
 	if err := probe.CheckScript(got[0].Command[0]); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nl", "gpu", "preview.json")); err != nil {
+		t.Fatalf("preview: %v", err)
 	}
 	if prov.n.Load() != 1 {
 		t.Fatalf("calls=%d", prov.n.Load())
@@ -161,13 +168,14 @@ func TestIntentKindChangeRecompiles(t *testing.T) {
 
 func TestServiceDoesNotReuseLegacyMetricScript(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "check.sh"), []byte(validScript()), 0o755); err != nil {
+	legacy := t.TempDir()
+	if err := os.WriteFile(filepath.Join(legacy, "check.sh"), []byte(validScript()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "check.meta.json"), []byte(`{"hash":"old"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(legacy, "check.meta.json"), []byte(`{"hash":"old"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c := &Compiler{Dir: dir, AIEnabled: false}
+	c := &Compiler{Dir: dir, LegacyDir: legacy, AIEnabled: false}
 	got := c.Prepare(context.Background(), []config.StatusProbe{{
 		Key: "check", Kind: config.StatusProbeService, Intent: "service check",
 	}})
@@ -178,11 +186,14 @@ func TestServiceDoesNotReuseLegacyMetricScript(t *testing.T) {
 
 func TestPrepareKeepsOldOnBadScript(t *testing.T) {
 	dir := t.TempDir()
-	script := filepath.Join(dir, "gpu.sh")
+	script := filepath.Join(dir, "nl", "gpu", "probe.sh")
+	if err := os.MkdirAll(filepath.Dir(script), 0o750); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(script, []byte(validScript()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "gpu.meta.json"), []byte(`{"hash":"old"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "nl", "gpu", "meta.json"), []byte(`{"hash":"old"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	old, _ := os.ReadFile(script)
@@ -274,5 +285,129 @@ func TestNumericMeta(t *testing.T) {
 	}
 	if _, ok := m["note"]; ok {
 		t.Fatal("non-numeric leaked")
+	}
+}
+
+func TestPrepareSkipsDisabled(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{text: validScript()}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	off := false
+	got := c.Prepare(context.Background(), []config.StatusProbe{{
+		Key: "gpu", Intent: "util", Enabled: &off,
+	}})
+	if len(got) != 0 || prov.n.Load() != 0 {
+		t.Fatalf("disabled ran ready=%d calls=%d", len(got), prov.n.Load())
+	}
+	if _, _, ok := c.PrepareOne(context.Background(), config.StatusProbe{Key: "gpu", Intent: "util", Enabled: &off}); !ok {
+		t.Fatal("PrepareOne should still compile disabled probes for UI build")
+	}
+}
+
+func TestIntentHistoryChangesHash(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{text: validScript()}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	p := config.StatusProbe{Key: "gpu", Intent: "util"}
+	if len(c.Prepare(context.Background(), []config.StatusProbe{p})) != 1 {
+		t.Fatal("first")
+	}
+	p.Supplement("加上显存")
+	if len(c.Prepare(context.Background(), []config.StatusProbe{p})) != 1 {
+		t.Fatal("history")
+	}
+	if prov.n.Load() != 2 {
+		t.Fatalf("history must recompile, calls=%d", prov.n.Load())
+	}
+	if IntentHash(p) == IntentHash(config.StatusProbe{Key: "gpu", Intent: p.Intent}) {
+		t.Fatal("hash should include history")
+	}
+}
+
+func TestPrepareHTTPWritesNLDirNotShell(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{text: `{"url":"http://127.0.0.1:18080/health","method":"GET","expect_status":[200]}`}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	p := config.StatusProbe{Key: "local-health", Kind: config.StatusProbeHTTP, Intent: "health"}
+	got := c.Prepare(context.Background(), []config.StatusProbe{p})
+	if len(got) != 1 || got[0].HTTP == nil {
+		t.Fatalf("ready=%+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nl", "local-health", "http.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nl", "local-health", "probe.sh")); !os.IsNotExist(err) {
+		t.Fatal("http must not write shell")
+	}
+}
+
+func TestExpandSpecFillsDocument(t *testing.T) {
+	dir := t.TempDir()
+	want := RenderSpecSkeleton(config.StatusProbe{Key: "disk", Kind: config.StatusProbeMetric, Name: "磁盘"}, "统计 /data 占用")
+	prov := &stubProvider{text: want}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	got, err := c.ExpandSpec(context.Background(), config.StatusProbe{Key: "disk", Kind: config.StatusProbeMetric, Name: "磁盘"}, "统计 /data 占用")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task, _ := prov.lastTask.Load().(string); task != "probe_spec" {
+		t.Fatalf("task=%q", task)
+	}
+	if !LooksLikeSpec(got) || !strings.Contains(got, "统计 /data 占用") {
+		t.Fatalf("spec=%s", got)
+	}
+}
+
+func TestExpandSpecFallsBackWithoutAI(t *testing.T) {
+	c := &Compiler{Dir: t.TempDir(), AIEnabled: false}
+	got, err := c.ExpandSpec(context.Background(), config.StatusProbe{Key: "n"}, "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !LooksLikeSpec(got) || !strings.Contains(got, "hello") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestApplyIdeaRecordsHistory(t *testing.T) {
+	p := config.StatusProbe{Intent: "old spec"}
+	ApplyIdea(&p, SpecTitle+"\n## 要做什么\nnew\n## 输出\n")
+	if p.Intent == "old spec" || len(p.IntentHistory) != 1 || p.IntentHistory[0] != "old spec" {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestTrialOneRunsCompiledScript(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{text: validScript()}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	p := config.StatusProbe{Key: "gpu", Intent: "util"}
+	if len(c.Prepare(context.Background(), []config.StatusProbe{p})) != 1 {
+		t.Fatal("prepare")
+	}
+	calls := prov.n.Load()
+	prev := c.TrialOne(context.Background(), p)
+	if !prev.OK || !strings.Contains(prev.Output, "gpu_util") {
+		t.Fatalf("%+v", prev)
+	}
+	if prov.n.Load() != calls {
+		t.Fatal("trial must not call AI")
+	}
+}
+
+func TestPrepareReusesLegacyFlatDir(t *testing.T) {
+	dir := t.TempDir()
+	legacy := t.TempDir()
+	script := filepath.Join(legacy, "gpu.sh")
+	if err := os.WriteFile(script, []byte(validScript()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "gpu.meta.json"), []byte(`{"kind":"metric"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &Compiler{Dir: dir, LegacyDir: legacy, AIEnabled: false}
+	got := c.Prepare(context.Background(), []config.StatusProbe{{Key: "gpu", Intent: "util"}})
+	if len(got) != 1 || got[0].Command[0] != script {
+		t.Fatalf("legacy=%+v", got)
 	}
 }

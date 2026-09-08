@@ -11,30 +11,41 @@ server:
 machine:
   key: "home-server"
   display_name: "家庭服务器"
+  # intent 由 config tui/web Build 写入。直接改本文件请用 command + extensions/custom/（见 skills/board-client-extension）。
   status_probes:
     - key: gpu
       kind: metric
+      enabled: true
       intent: "NVIDIA GPU 利用率 0-100"
+      dir: nl/gpu
     - key: data_stats
       kind: metric
       intent: "统计 /data 占用百分比和文件数量"
       path: /data
       interval: 60s
+      dir: nl/data_stats
     - key: docker-nginx
       kind: service
       name: "容器内 Nginx"
       intent: "通过 docker exec 检查 web 容器里的 nginx 进程与配置状态"
       interval: 60s
       ttl_seconds: 180
+      dir: nl/docker-nginx
     - key: local-health
       kind: http
       name: "本机健康接口"
       intent: "检查 http://127.0.0.1:18080/health，期望状态码 200"
       interval: 30s
       ttl_seconds: 180
+      dir: nl/local-health
+    # 手写自定义：不要写 intent
+    # - key: disk-data
+    #   kind: metric
+    #   command: ["/var/lib/agentboard-client/extensions/custom/disk-data/probe.sh"]
 
 storage:
   spool_path: "/var/lib/agentboard-client/spool.db"
+  # extensions_path: "/var/lib/agentboard-client/extensions"  # 默认 dirname(spool)/extensions；其下 nl/ 与 custom/ 同级
   max_events: 50000
 
 intervals:
