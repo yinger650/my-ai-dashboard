@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LogEntry, Machine, PinnedLog, Service, StatusItem } from "../types";
@@ -144,7 +144,7 @@ function mockApi() {
       if (url.includes("/machines/m1")) {
         return jsonOk({
           machine,
-          latest_metric: { occurred_at: "2026-09-08T12:00:00.000Z", cpu_percent: 12, load1: 0.2, memory_used_bytes: 1, memory_total_bytes: 4, swap_used_bytes: null, swap_total_bytes: null, disk_read_bps: null, disk_write_bps: null, network_rx_bps: null, network_tx_bps: null, root_disk_used_bytes: 10, root_disk_total_bytes: 100 },
+          latest_metric: { occurred_at: "2026-09-08T12:00:00.000Z", cpu_percent: 12, load1: 0.2, memory_used_bytes: 1, memory_total_bytes: 4, swap_used_bytes: null, swap_total_bytes: null, disk_read_bps: null, disk_write_bps: null, network_rx_bps: 1048576, network_tx_bps: 2048, root_disk_used_bytes: 10, root_disk_total_bytes: 100 },
           health: "online",
           resource_severity: "normal",
           heartbeat_metrics: { gpu: 40 },
@@ -171,8 +171,14 @@ function renderPage() {
 }
 
 describe("MachineDetailPage logs layout", () => {
-  beforeEach(mockApi);
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    localStorage.clear();
+    mockApi();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
 
   it("shows the log pane and all service pin chips on a wide screen", async () => {
     stubMatchMedia(true);
@@ -188,6 +194,9 @@ describe("MachineDetailPage logs layout", () => {
     expect(screen.getByRole("button", { name: /Cursor Agent/ })).toBeInTheDocument();
     expect(await screen.findByText("机器滚动日志")).toBeInTheDocument();
     expect(screen.getByText("状态：3 条生效反代（正常）。")).toBeInTheDocument();
+    expect(screen.getByTitle("网速")).toHaveTextContent("↓");
+    expect(screen.queryByText("网络")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "添加瓦片" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Nginx/ }));
     expect(screen.getByRole("dialog", { name: "Nginx 置顶日志" })).toBeInTheDocument();
@@ -218,5 +227,22 @@ describe("MachineDetailPage logs layout", () => {
     expect(screen.getByRole("button", { name: "打开日志" })).toHaveAttribute("aria-expanded", "false");
     expect(pane).toHaveAttribute("aria-hidden", "true");
     expect(pane).toHaveClass("translate-x-full");
+  });
+
+  it("pins a status-log row onto the tile grid", async () => {
+    stubMatchMedia(true);
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "测试机" })).toBeInTheDocument();
+    expect(screen.getByText("12.0%")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "添加瓦片" }));
+    expect(await screen.findByRole("heading", { name: "从状态日志添加瓦片" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /模型/ }));
+    const grid = screen.getByTestId("machine-tile-grid");
+    expect(await within(grid).findByText("llama")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "从状态日志添加瓦片" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "移除 模型" }));
+    expect(within(grid).queryByText("llama")).not.toBeInTheDocument();
   });
 });

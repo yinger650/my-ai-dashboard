@@ -173,4 +173,24 @@ func (s *Server) handleDeleteService(w http.ResponseWriter, r *http.Request) {
 	api.WriteData(w, rid, map[string]any{"deleted": true}, nil)
 }
 
+func (s *Server) handleDeletePinnedLog(w http.ResponseWriter, r *http.Request) {
+	rid := requestID(r.Context())
+	id := chi.URLParam(r, "id")
+	if _, err := s.st.GetServiceByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
+		return
+	} else if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
+		return
+	}
+	if err := s.st.DeletePinnedLog(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
+		return
+	} else if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
+		return
+	}
+	api.WriteData(w, rid, map[string]any{"cleared": true}, nil)
+}
+
 var _ = shared.NowUTC

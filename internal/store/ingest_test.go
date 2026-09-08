@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -167,6 +168,15 @@ func TestIngestProjectionsAndDuplicates(t *testing.T) {
 	pinnedAll, err := st.ListPinnedLogsByMachine(ctx, m.ID)
 	if err != nil || len(pinnedAll) != 1 || pinnedAll[0].Markdown != "pinned" {
 		t.Fatalf("pinned by machine: %v %+v", err, pinnedAll)
+	}
+	if err := st.DeletePinnedLog(ctx, svc.ID); err != nil {
+		t.Fatalf("delete pin: %v", err)
+	}
+	if _, err := st.GetPinnedLog(ctx, svc.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("pin still present: %v", err)
+	}
+	if err := st.DeletePinnedLog(ctx, svc.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete: %v", err)
 	}
 	machStatuses, err := st.ListStatusesByMachine(ctx, m.ID)
 	if err != nil || len(machStatuses) != 1 || machStatuses[0].ServiceName == "" {

@@ -107,6 +107,7 @@ func (s *Server) Router() http.Handler {
 				r.Post("/services/{id}/artifacts", s.handleUploadArtifact)
 				r.Delete("/artifacts/{id}", s.handleDeleteArtifact)
 				r.Post("/services/{id}/summarize", s.handleSummarizeLogs)
+				r.Delete("/services/{id}/pinned", s.handleDeletePinnedLog)
 			})
 		})
 	})

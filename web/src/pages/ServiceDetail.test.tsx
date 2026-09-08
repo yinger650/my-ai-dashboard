@@ -82,15 +82,21 @@ function jsonOk(data: unknown): Response {
 }
 
 function mockApi() {
+  let currentPinned: PinnedLog | null = pinned;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/pinned") && method === "DELETE") {
+        currentPinned = null;
+        return jsonOk({ cleared: true });
+      }
       if (url.includes("/logs")) return jsonOk(logs);
       if (url.includes("/runs")) return jsonOk(runs);
       if (url.includes("/artifacts")) throw new Error("artifacts should not be requested");
       if (url.includes("/services/svc-1")) {
-        return jsonOk({ service, machine, statuses: [], pinned });
+        return jsonOk({ service, machine, statuses: [], pinned: currentPinned });
       }
       return jsonOk({});
     }),
@@ -134,5 +140,15 @@ describe("ServiceDetailPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "显示全部" }));
     expect(screen.getByText("服务心跳")).toBeInTheDocument();
+  });
+
+  it("clears the pinned log from the service page", async () => {
+    renderPage();
+    expect(await screen.findByText("当前任务清单")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除置顶" }));
+    expect(await screen.findByText("暂无置顶")).toBeInTheDocument();
+    expect(screen.queryByText("当前任务清单")).not.toBeInTheDocument();
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls.some(([input, init]) => String(input).includes("/services/svc-1/pinned") && init?.method === "DELETE")).toBe(true);
   });
 });
