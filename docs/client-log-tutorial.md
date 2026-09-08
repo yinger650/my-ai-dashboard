@@ -177,7 +177,7 @@ CURSOR_API_KEY=你的CursorAgentKey
 
 然后 `sudo systemctl restart board-client`。Key 只给这台机器上的 `cursor-agent`，不要写入 YAML、git 或看板。
 
-每条扩展：填 `key`、类型、显示名和中文描述 → **Build** → 看预览；不好就**补充**再 Build。成功后才能在配置面板勾选启用，最后保存。
+每条扩展：填 `key`、类型、名称、采集间隔和过期时间 → 在「请输入你的想法」里描述需求 → **Build**（按钮旁 building）→ 旁边点 **预览**，返回值在按钮下方。完整规格只读显示在「自然语言描述」。成功后才能勾选启用，最后保存。
 
 | 类型 | 适合什么 | 例子 |
 |---|---|---|

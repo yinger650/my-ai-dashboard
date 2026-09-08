@@ -20,6 +20,7 @@ export function BoardGrid({
   editMode,
   autoRefresh,
   pollMs,
+  extraPinKeys = [],
   onLayoutChange,
 }: {
   machines: BoardMachine[];
@@ -27,6 +28,7 @@ export function BoardGrid({
   editMode: boolean;
   autoRefresh: boolean;
   pollMs: number;
+  extraPinKeys?: string[];
   onLayoutChange: (layout: Layout) => void;
 }) {
   const isMobile = useMediaQuery(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
@@ -46,7 +48,7 @@ export function BoardGrid({
       <div className="flex flex-col gap-4">
         {machines.map((m) => (
           <div key={m.id} className="h-[540px]">
-            <MachineCard m={m} autoRefresh={autoRefresh} pollMs={pollMs} />
+            <MachineCard m={m} autoRefresh={autoRefresh} pollMs={pollMs} extraPinKeys={extraPinKeys} />
           </div>
         ))}
       </div>
@@ -83,7 +85,7 @@ export function BoardGrid({
           >
             {machines.map((m) => (
               <div key={m.id} className="h-full">
-                <MachineCard m={m} autoRefresh={autoRefresh} pollMs={pollMs} editMode={editMode} />
+                <MachineCard m={m} autoRefresh={autoRefresh} pollMs={pollMs} editMode={editMode} extraPinKeys={extraPinKeys} />
               </div>
             ))}
           </GridLayout>

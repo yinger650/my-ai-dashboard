@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -30,14 +31,16 @@ func memPct(m *store.MetricSample) *float64 {
 	return &p
 }
 
-func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
+func (s *Server) buildBoard(r *http.Request) ([]map[string]any, []map[string]string, error) {
 	ctx := r.Context()
 	s.closeStaleRunsBestEffort(ctx)
 	now := time.Now().UTC()
 	machines, err := s.st.ListMachines(ctx, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	extraPins := parseStringSlice(s.settingJSON(r, "card_pin_keys"))
+	names := map[string]string{}
 	out := make([]map[string]any, 0, len(machines))
 	for _, m := range machines {
 		latest, _ := s.st.LatestMetric(ctx, m.ID)
@@ -89,6 +92,20 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 				row["path"] = svc.Path
 			}
 			services = append(services, row)
+			if svc.ServiceKey != "" && !defaultCardPinKeys[svc.ServiceKey] && svc.Type == "virtual" {
+				if _, ok := names[svc.ServiceKey]; !ok {
+					names[svc.ServiceKey] = svc.Name
+				}
+			}
+		}
+		for _, p := range pinned {
+			if p.ServiceKey != "" && !defaultCardPinKeys[p.ServiceKey] {
+				if p.ServiceName != "" {
+					names[p.ServiceKey] = p.ServiceName
+				} else if _, ok := names[p.ServiceKey]; !ok {
+					names[p.ServiceKey] = p.ServiceKey
+				}
+			}
 		}
 
 		out = append(out, map[string]any{
@@ -106,17 +123,24 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, error) {
 			"service_counts":    counts,
 			"services":          services,
 			"statuses":          statuses,
-			"pinned_logs":       cardPins(pinned),
+			"pinned_logs":       cardPins(pinned, extraPins),
 			"recent_logs":       cardRecentLogs(recent, 20),
 			"active_runs":       activeRuns,
 		})
 	}
-	return out, nil
+	for _, k := range extraPins {
+		if k != "" && !defaultCardPinKeys[k] {
+			if _, ok := names[k]; !ok {
+				names[k] = k
+			}
+		}
+	}
+	return out, pinCandidateList(names), nil
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
-	board, err := s.buildBoard(r)
+	board, candidates, err := s.buildBoard(r)
 	if err != nil {
 		s.log.Error("build board failed", "err", err)
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
@@ -127,6 +151,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	title := s.settingString(r, "board_title", "AgentBoard Personal")
 	poll := s.settingInt(r, "poll_interval_seconds", 15)
 	layout := s.settingJSON(r, "board_layout")
+	extraPins := parseStringSlice(s.settingJSON(r, "card_pin_keys"))
 	api.WriteData(w, rid, map[string]any{
 		"title":                 title,
 		"machines":              board,
@@ -135,6 +160,8 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		"poll_interval_seconds": poll,
 		"layout":                layout,
 		"public_url":            s.cfg.PublicURL,
+		"card_pin_keys":         extraPins,
+		"pin_candidates":        candidates,
 	}, nil)
 }
 
@@ -215,18 +242,77 @@ func cardRecentLogs(logs []store.LogEntry, limit int) []store.LogEntry {
 	return out
 }
 
-func cardPins(pins []store.PinnedLog) []store.PinnedLog {
-	keep := map[string]bool{
-		"host-listen": true,
-		"nginx":       true,
-		"docker":      true,
-		"cron":        true,
+func cardPins(pins []store.PinnedLog, extraKeys []string) []store.PinnedLog {
+	keep := map[string]bool{}
+	for k, v := range defaultCardPinKeys {
+		keep[k] = v
+	}
+	for _, k := range extraKeys {
+		if k != "" {
+			keep[k] = true
+		}
 	}
 	out := make([]store.PinnedLog, 0, len(pins))
 	for _, p := range pins {
 		if keep[p.ServiceKey] {
 			out = append(out, p)
 		}
+	}
+	return out
+}
+
+var defaultCardPinKeys = map[string]bool{
+	"host-listen": true,
+	"nginx":       true,
+	"docker":      true,
+	"cron":        true,
+}
+
+func parseStringSlice(v any) []string {
+	switch raw := v.(type) {
+	case []string:
+		out := make([]string, 0, len(raw))
+		for _, s := range raw {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			s, ok := item.(string)
+			if !ok {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func pinCandidateList(names map[string]string) []map[string]string {
+	if len(names) == 0 {
+		return []map[string]string{}
+	}
+	keys := make([]string, 0, len(names))
+	for k := range names {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]map[string]string, 0, len(keys))
+	for _, k := range keys {
+		name := strings.TrimSpace(names[k])
+		if name == "" {
+			name = k
+		}
+		out = append(out, map[string]string{"service_key": k, "name": name})
 	}
 	return out
 }

@@ -16,6 +16,7 @@ import (
 	"agentboard/internal/client/aiprovider"
 	"agentboard/internal/client/config"
 	"agentboard/internal/client/spool"
+	"agentboard/internal/client/statusprobe"
 )
 
 func TestSaveWritesYAML(t *testing.T) {
@@ -169,7 +170,11 @@ collectors:
 	body, _ := readAll(resp)
 	if !strings.Contains(body, "AI 主机巡检") || !strings.Contains(body, `name="feat"`) ||
 		!strings.Contains(body, `name="probe_kind"`) || !strings.Contains(body, "CURSOR_API_KEY") ||
-		!strings.Contains(body, "<details") || !strings.Contains(body, `formaction="build"`) {
+		!strings.Contains(body, "<details") || !strings.Contains(body, `formaction="build"`) ||
+		!strings.Contains(body, "请输入你的想法") || !strings.Contains(body, "采集间隔") ||
+		!strings.Contains(body, `data-intent-view`) || !strings.Contains(body, "readonly") ||
+		!strings.Contains(body, `data-add-row="http"`) || !strings.Contains(body, `data-add-row="script"`) ||
+		!strings.Contains(body, "添加一行") || !strings.Contains(body, `data-del-row`) {
 		t.Fatalf("page=%s", body)
 	}
 	form := url.Values{}
@@ -183,6 +188,7 @@ collectors:
 	form.Add("probe_kind", "service")
 	form.Add("probe_name", "GPU 服务")
 	form.Add("probe_intent", "util")
+	form.Add("probe_idea", "")
 	form.Add("probe_path", "")
 	form.Add("probe_interval", "")
 	form.Add("probe_ttl", "240")
@@ -220,7 +226,7 @@ collectors:
 
 func TestTUIAddsNaturalLanguageHTTPProbe(t *testing.T) {
 	m := &Model{}
-	in := strings.NewReader("a\nlocal-health\nhttp\n本机健康\n检查 http://127.0.0.1:18080/health\n\n30s\n180\n")
+	in := strings.NewReader("a\nlocal-health\nhttp\n本机健康\n30s\n180\n\n检查 http://127.0.0.1:18080/health\n")
 	var out strings.Builder
 	if err := editProbes(m, bufio.NewReader(in), &out); err != nil {
 		t.Fatal(err)
@@ -232,6 +238,9 @@ func TestTUIAddsNaturalLanguageHTTPProbe(t *testing.T) {
 	if p.Key != "local-health" || p.Kind != config.StatusProbeHTTP || p.Name != "本机健康" ||
 		p.Interval.Duration != 30*time.Second || p.TTLSeconds != 180 {
 		t.Fatalf("probe=%+v", p)
+	}
+	if p.Idea != "检查 http://127.0.0.1:18080/health" {
+		t.Fatalf("idea=%q", p.Idea)
 	}
 	if !strings.Contains(out.String(), "CURSOR_API_KEY") {
 		t.Fatalf("missing key hint: %s", out.String())
@@ -252,7 +261,7 @@ func TestTUIExpandBuildPreviewEnable(t *testing.T) {
 	m.Probes = []config.StatusProbe{{
 		Key: "gpu", Kind: config.StatusProbeMetric, Intent: "NVIDIA GPU", Enabled: config.BoolPtr(false),
 	}}
-	in := strings.NewReader("0\nb\ne\n\n\n")
+	in := strings.NewReader("0\nb\np\ne\n\n\n")
 	var out strings.Builder
 	if err := editProbes(m, bufio.NewReader(in), &out); err != nil {
 		t.Fatal(err)
@@ -303,6 +312,7 @@ ai:
 	form.Add("probe_kind", "metric")
 	form.Add("probe_name", "gpu")
 	form.Add("probe_intent", "util")
+	form.Add("probe_idea", "")
 	form.Add("probe_path", "")
 	form.Add("probe_interval", "")
 	form.Add("probe_ttl", "")
@@ -321,6 +331,9 @@ ai:
 	}
 	if !strings.Contains(body, "Build 完成") || !strings.Contains(body, "gpu_util") {
 		t.Fatalf("page=%s", body)
+	}
+	if !strings.Contains(body, "请输入你的想法") || !strings.Contains(body, "采集间隔") || !strings.Contains(body, "过期时间") {
+		t.Fatalf("labels missing: %s", body)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "extensions", "nl", "gpu", "probe.sh")); err != nil {
 		t.Fatal(err)
@@ -341,10 +354,152 @@ ai:
 	}
 }
 
-type stubAI struct{ text string }
+func TestWebAddDeleteCustomRows(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	if err := os.WriteFile(p, []byte(`version: 1
+server:
+  url: "https://board.yinger650.com"
+  machine_token: "abp_m_x"
+machine:
+  key: "home-server"
+storage:
+  spool_path: "`+filepath.Join(dir, "spool.db")+`"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(newMux(p))
+	defer ts.Close()
+	form := url.Values{}
+	form.Set("url", "https://board.yinger650.com")
+	form.Set("key", "home-server")
+	resp, err := http.PostForm(ts.URL+"/add-http", form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := mustRead(resp)
+	if resp.StatusCode != 200 || !strings.Contains(body, "已添加一行 HTTP 目标") {
+		t.Fatalf("add-http %d %s", resp.StatusCode, body)
+	}
+	form.Add("http_key", "site-board")
+	form.Add("http_name", "AgentBoard")
+	form.Add("http_url", "https://board.yinger650.com/health/live")
+	resp, err = http.PostForm(ts.URL+"/add-script", form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = mustRead(resp)
+	if resp.StatusCode != 200 || !strings.Contains(body, "已添加一行脚本") {
+		t.Fatalf("add-script %d %s", resp.StatusCode, body)
+	}
+	form.Add("script_key", "load")
+	form.Add("script_name", "Load")
+	form.Add("script_cmd", "/usr/local/bin/load.sh")
+	form.Set("row_index", "0")
+	resp, err = http.PostForm(ts.URL+"/del-http", form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = mustRead(resp)
+	if resp.StatusCode != 200 || !strings.Contains(body, "已删除一行 HTTP 目标") {
+		t.Fatalf("del-http %d %s", resp.StatusCode, body)
+	}
+	if strings.Contains(body, `value="site-board"`) {
+		t.Fatalf("deleted http row still on page: %s", body)
+	}
+}
+
+func TestWebJSONBuildExpandsIdeaThenPreview(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "client.yaml")
+	if err := os.WriteFile(p, []byte(`version: 1
+server:
+  url: "https://board.yinger650.com"
+  machine_token: "abp_m_x"
+machine:
+  key: "home-server"
+  status_probes:
+    - key: gpu
+      enabled: false
+storage:
+  spool_path: "`+filepath.Join(dir, "spool.db")+`"
+ai:
+  enabled: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"running\",\"summary\":\"ok\",\"severity\":\"normal\",\"statuses\":[{\"key\":\"gpu_util\",\"value\":\"41\"}]}'\n"
+	spec := statusprobe.RenderSpecSkeleton(config.StatusProbe{Key: "gpu", Kind: "metric", Name: "gpu"}, "统计 GPU")
+	ai := &stubAI{text: script, spec: spec}
+	ts := httptest.NewServer(newWeb(p, ai))
+	defer ts.Close()
+	form := url.Values{}
+	form.Set("url", "https://board.yinger650.com")
+	form.Set("key", "home-server")
+	form.Add("probe_key", "gpu")
+	form.Add("probe_key_edit", "gpu")
+	form.Add("probe_kind", "metric")
+	form.Add("probe_name", "gpu")
+	form.Add("probe_intent", "")
+	form.Add("probe_idea", "统计 GPU")
+	form.Add("probe_path", "")
+	form.Add("probe_interval", "60s")
+	form.Add("probe_ttl", "")
+	form.Add("probe_dir", "")
+	form.Add("probe_command", "")
+	form.Add("probe_history", "")
+	form.Set("probe_index", "0")
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/build", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := mustRead(resp)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, `"ok":true`) || !strings.Contains(body, "AgentBoard 探测规格") || !strings.Contains(body, "gpu_util") {
+		t.Fatalf("json=%s", body)
+	}
+	if ai.calls < 2 {
+		t.Fatalf("want spec+script calls, got %d", ai.calls)
+	}
+	req, err = http.NewRequest(http.MethodPost, ts.URL+"/preview", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := mustRead(resp)
+	if resp.StatusCode != 200 || !strings.Contains(prev, "gpu_util") {
+		t.Fatalf("preview %d %s", resp.StatusCode, prev)
+	}
+}
+
+type stubAI struct {
+	text  string
+	spec  string
+	calls int
+}
 
 func (s *stubAI) Name() string { return "stub" }
-func (s *stubAI) Run(_ context.Context, _ aiprovider.Request) (aiprovider.Result, error) {
+func (s *stubAI) Run(_ context.Context, req aiprovider.Request) (aiprovider.Result, error) {
+	s.calls++
+	if req.Task == "probe_spec" {
+		if s.spec != "" {
+			return aiprovider.Result{Text: s.spec}, nil
+		}
+		return aiprovider.Result{Text: "# AgentBoard 探测规格\n## 要做什么\n" + req.Untrusted + "\n## 输出\n"}, nil
+	}
 	return aiprovider.Result{Text: s.text}, nil
 }
 

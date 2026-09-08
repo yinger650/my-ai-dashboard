@@ -48,6 +48,7 @@ func (s *Server) defaultSettings() map[string]any {
 		"access_retention_days":     accessDays,
 		"event_quota_bytes":         eventQuota,
 		"artifact_quota_bytes":      artifactQuota,
+		"card_pin_keys":             []string{},
 	}
 }
 
@@ -121,7 +122,7 @@ var allowedSettingKeys = map[string]bool{
 	"cpu_warn": true, "cpu_err": true, "mem_warn": true, "mem_err": true, "disk_warn": true, "disk_err": true,
 	"raw_metric_retention_days": true, "event_retention_days": true, "access_retention_days": true,
 	"event_quota_bytes": true, "artifact_quota_bytes": true,
-	"board_layout": true,
+	"board_layout": true, "card_pin_keys": true,
 }
 
 func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {

@@ -341,6 +341,60 @@ func TestPrepareHTTPWritesNLDirNotShell(t *testing.T) {
 	}
 }
 
+func TestExpandSpecFillsDocument(t *testing.T) {
+	dir := t.TempDir()
+	want := RenderSpecSkeleton(config.StatusProbe{Key: "disk", Kind: config.StatusProbeMetric, Name: "磁盘"}, "统计 /data 占用")
+	prov := &stubProvider{text: want}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	got, err := c.ExpandSpec(context.Background(), config.StatusProbe{Key: "disk", Kind: config.StatusProbeMetric, Name: "磁盘"}, "统计 /data 占用")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task, _ := prov.lastTask.Load().(string); task != "probe_spec" {
+		t.Fatalf("task=%q", task)
+	}
+	if !LooksLikeSpec(got) || !strings.Contains(got, "统计 /data 占用") {
+		t.Fatalf("spec=%s", got)
+	}
+}
+
+func TestExpandSpecFallsBackWithoutAI(t *testing.T) {
+	c := &Compiler{Dir: t.TempDir(), AIEnabled: false}
+	got, err := c.ExpandSpec(context.Background(), config.StatusProbe{Key: "n"}, "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !LooksLikeSpec(got) || !strings.Contains(got, "hello") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestApplyIdeaRecordsHistory(t *testing.T) {
+	p := config.StatusProbe{Intent: "old spec"}
+	ApplyIdea(&p, SpecTitle+"\n## 要做什么\nnew\n## 输出\n")
+	if p.Intent == "old spec" || len(p.IntentHistory) != 1 || p.IntentHistory[0] != "old spec" {
+		t.Fatalf("%+v", p)
+	}
+}
+
+func TestTrialOneRunsCompiledScript(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{text: validScript()}
+	c := &Compiler{Dir: dir, Provider: prov, AIEnabled: true}
+	p := config.StatusProbe{Key: "gpu", Intent: "util"}
+	if len(c.Prepare(context.Background(), []config.StatusProbe{p})) != 1 {
+		t.Fatal("prepare")
+	}
+	calls := prov.n.Load()
+	prev := c.TrialOne(context.Background(), p)
+	if !prev.OK || !strings.Contains(prev.Output, "gpu_util") {
+		t.Fatalf("%+v", prev)
+	}
+	if prov.n.Load() != calls {
+		t.Fatal("trial must not call AI")
+	}
+}
+
 func TestPrepareReusesLegacyFlatDir(t *testing.T) {
 	dir := t.TempDir()
 	legacy := t.TempDir()

@@ -7,7 +7,64 @@ description: Add a handwritten board-client custom probe (script or HTTP target)
 
 给**正在跑的 board-client** 加一条本机采集扩展（脚本或 HTTP）。只在用户要你**直接改 YAML / 放脚本**时用本 skill。
 
-自然语言扩展走 `board-client config tui` 或 `config web`：展开条目 → 写描述 → Build → 预览 → 启用。**不要**在 YAML 里新写 `machine.status_probes[].intent`。
+自然语言扩展走 `board-client config tui` 或 `config web`：填 key / 类型 / 名称 / 采集间隔 / 过期时间 → 在「请输入你的想法」里描述需求 → **Build**（按钮旁 building）→ 旁边 **预览**，返回值在按钮下方。Build 会先生成完整探测规格（只读，见下方格式），再据此写脚本。**不要**在 YAML 里新写 `machine.status_probes[].intent`。
+
+手写扩展时，必须按同一套**探测规格**来实现：先在心里（或注释里）写清「要做什么 / 输出 JSON / 约束」，再一次性写出 `probe.sh` 或 HTTP 目标。不要边写边猜字段。
+
+## 探测规格格式
+
+任意模型实现一条扩展，都应能靠下面这份规格一次性完成。自然语言 Build 生成的文本、以及手写脚本，都遵守它。
+
+```markdown
+# AgentBoard 探测规格
+
+## 元数据
+- key: <探针 key，[a-z0-9._-]{1,64}>
+- kind: metric | service | http
+- name: <看板上的中文名称>
+- path: <可选绝对路径；没有则写 无>
+
+## 要做什么
+用条目写清本机只读采集步骤：读哪些文件/命令、如何计算、失败时怎么办。
+不要改系统、不要发网络（http 类型除外，且 http 不写脚本）。
+
+## 输出
+### kind = metric 或 service
+脚本 stdout 必须是且仅是一个 JSON 对象：
+
+{
+  "state": "running",
+  "summary": "一句话中文摘要",
+  "severity": "normal",
+  "statuses": [
+    {"key": "snake_case", "label": "中文标签", "value": "字符串", "unit": ""}
+  ]
+}
+
+- state：通常 running；采不到可写 failed
+- severity：normal / warning / error / critical
+- statuses[].key：稳定英文蛇形；label：中文；value：字符串
+- metric：value 尽量是十进制数字（进入机器卡片）；不要 logs / pinned_markdown
+- service：value 可以是文本；可另加 logs 和 pinned_markdown
+
+{
+  "logs": [{"markdown": "一行说明", "severity": "info"}],
+  "pinned_markdown": "| 列 | 值 |"
+}
+
+### kind = http
+不要写 shell。只输出：
+
+{"url":"http://127.0.0.1:8080/health","method":"GET","expect_status":[200],"expect_contains":""}
+
+url 必须是无用户名密码的 http/https 绝对地址；method 只能 GET 或 HEAD；状态码 100–599。
+
+## 约束
+- POSIX sh，首行 #!/bin/sh；只输出脚本或上述 JSON，不要解释
+- 禁止 curl / wget、读 token 环境变量、调用 /ingest/、改配置或服务
+- 禁止把不可信字符串拼进 shell
+- 失败时仍输出合法 JSON，severity=error，summary 说明原因
+```
 
 ## 目录
 
@@ -24,11 +81,7 @@ extensions/
 
 ## 脚本 stdout
 
-POSIX sh，stdout 一个 JSON 对象（`probe.Result`）：
-
-```json
-{"state":"running","summary":"...","severity":"normal","statuses":[{"key":"...","label":"...","value":"...","unit":""}]}
-```
+POSIX sh，stdout **一个** JSON 对象（`probe.Result`），字段与上面「输出」一节相同。
 
 - `metric`：`value` 尽量是数字，会进机器 heartbeat metadata
 - `service`：可含 `logs`、`pinned_markdown`，投影成独立 virtual Service

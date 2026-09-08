@@ -19,14 +19,32 @@ func TestCardRecentLogsSkipCron(t *testing.T) {
 	}
 }
 
+func TestParseStringSliceAndCandidates(t *testing.T) {
+	got := parseStringSlice([]any{" gpu ", "", "site-web"})
+	if len(got) != 2 || got[0] != "gpu" || got[1] != "site-web" {
+		t.Fatalf("%v", got)
+	}
+	list := pinCandidateList(map[string]string{"site-web": "本机健康", "gpu": "GPU"})
+	if len(list) != 2 || list[0]["service_key"] != "gpu" || list[1]["name"] != "本机健康" {
+		t.Fatalf("%v", list)
+	}
+}
+
 func TestCardPinsKeepCurrentState(t *testing.T) {
 	got := cardPins([]store.PinnedLog{
 		{ServiceKey: "cursor-agent", Markdown: "agent"},
 		{ServiceKey: "nginx", Markdown: "proxy"},
 		{ServiceKey: "host-listen", Markdown: "ports"},
-	})
+	}, nil)
 	if len(got) != 2 {
 		t.Fatalf("%+v", got)
+	}
+	got = cardPins([]store.PinnedLog{
+		{ServiceKey: "cursor-agent", Markdown: "agent"},
+		{ServiceKey: "nginx", Markdown: "proxy"},
+	}, []string{"cursor-agent"})
+	if len(got) != 2 {
+		t.Fatalf("extra keys: %+v", got)
 	}
 }
 

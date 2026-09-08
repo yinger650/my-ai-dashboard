@@ -179,6 +179,7 @@ type StatusProbe struct {
 	Enabled       *bool    `yaml:"enabled,omitempty"`
 	Intent        string   `yaml:"intent,omitempty"`
 	IntentHistory []string `yaml:"intent_history,omitempty"`
+	Idea          string   `yaml:"-"` // UI-only; expanded into Intent on Build
 	Path          string   `yaml:"path,omitempty"`
 	Dir           string   `yaml:"dir,omitempty"`
 	Command       []string `yaml:"command,omitempty"`

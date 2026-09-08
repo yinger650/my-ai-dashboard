@@ -143,6 +143,7 @@ export function DashboardPage() {
           editMode={editMode}
           autoRefresh={autoRefresh}
           pollMs={pollMs}
+          extraPinKeys={data?.card_pin_keys ?? []}
           onLayoutChange={(layout) => saveLayout.mutate(layout)}
         />
       )}

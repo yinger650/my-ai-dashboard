@@ -366,7 +366,7 @@ board-server version
 
 表与 1.0 一致：`settings`、`admin_credentials`、`admin_sessions`、`machines`、`services`、`api_tokens`、`runs`、`events`、`metric_samples`、`current_status`、`pinned_logs`、`artifacts`、`access_logs`、`token_daily_usage`。
 
-必须存在的设置键：`board_title`、`timezone`、`poll_interval_seconds`、`board_layout`。阈值键（`cpu_warn` 等）可写入 settings，**现行健康计算尚未读取它们**。
+必须存在的设置键：`board_title`、`timezone`、`poll_interval_seconds`、`board_layout`、`card_pin_keys`。阈值键（`cpu_warn` 等）可写入 settings，**现行健康计算尚未读取它们**。
 
 `api_tokens` 相对 1.0 增加：
 
@@ -660,7 +660,7 @@ TOTP 未启用时忽略 `totp_code`。启用后未提供验证码返回 `totp_re
 
 需要管理员会话。返回：
 
-- `title`、`poll_interval_seconds`、`layout`（`board_layout`）、`public_url`、`server_time`
+- `title`、`poll_interval_seconds`、`layout`（`board_layout`）、`card_pin_keys`、`pin_candidates`、`public_url`、`server_time`
 - `recent_abnormal`：最近 1 小时异常访问条数
 - `machines[]`：每台未删除且启用的机器
   - 基础信息与计算后的 `health` / `resource_severity`
@@ -754,7 +754,7 @@ Viewer Token 只能调用 GET 查询接口和 `board.txt`。禁止用 `abp_v_` �
 - `GET /health/live`：进程存活，返回纯文本 `ok`，不查数据库
 - `GET /health/ready`：现行只检查数据库 ping，返回 `ok` 或 `not_ready`；1.0 要求的 Artifact 目录可写检查尚未做
 
-可 PATCH 的设置包括：`board_title`、`timezone`、`poll_interval_seconds`、`board_layout`（网格）、以及阈值/保留键（存储后健康计算尚未使用阈值）。
+可 PATCH 的设置包括：`board_title`、`timezone`、`poll_interval_seconds`、`board_layout`（网格）、`card_pin_keys`（首页卡片额外置顶 service_key）、以及阈值/保留键（存储后健康计算尚未使用阈值）。
 
 ### 12.10 HTTP 状态码和错误码
 
@@ -1192,7 +1192,7 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 - `custom/<key>/probe.sh`：直接改 YAML 时由用户或 agent 放置（见 `skills/board-client-extension`）
 - 旧扁平 `dirname(spool_path)/probes/<key>.sh` 只读回退
 
-YAML 字段：`enabled`（缺省开启；`false` 跳过编译与采集）、`intent`（当前描述）、`intent_history`（历次输入，只追加）、`dir`（相对 extensions 根，通常 `nl/<key>`）。Build 成功后 metric/service 同时写入 `command` 指向 `probe.sh`；http 不写 shell `command`。
+YAML 字段：`enabled`（缺省开启；`false` 跳过编译与采集）、`intent`（完整探测规格，由 Build 从用户「想法」生成，用户可改后再 Build）、`intent_history`（历次规格，只追加）、`dir`（相对 extensions 根，通常 `nl/<key>`）。Build 成功后 metric/service 同时写入 `command` 指向 `probe.sh`；http 不写 shell `command`。
 
 安全边界：
 
@@ -1202,7 +1202,7 @@ YAML 字段：`enabled`（缺省开启；`false` 跳过编译与采集）、`int
 4. `service` / `http` 只能投影到本条配置的 `key`，模型输出不能选择 `service_key`。配置删除后 metric 用 `null` 清 stale；service/http 依 TTL 变 stale。
 5. 看板 server 与 WEB 均不得创建、修改或下发该配置及命令。
 
-TUI/WEB 将每条自然语言扩展显示为可展开卡片：填写描述 → **Build** → 预览试跑 JSON（http 显示编译配置，本机 URL 可再探一次）→ 效果不好则**补充**（追加 `intent` 并记入 `intent_history`）→ Build 成功后才能在面板**启用/停用**。保存 overlay 才把 `enabled` 等写入 YAML 并 reload。直接编辑 YAML **不应当**新写 `intent`；用手写 `command`（落在 `extensions/custom/`）或原 `collectors.http.targets` / `collectors.probes.scripts`。Load 仍接受已有带 `intent` 的文件。给 agent 的说明见 `skills/board-client-extension`。
+TUI/WEB 将每条自然语言扩展显示为可展开卡片：key / 类型 / 名称 / 采集间隔 / 过期时间在上方；「自然语言描述」为完整探测规格（只读）；其下「请输入你的想法」。**Build** 与 **预览** 并排，试跑 JSON 显示在按钮下方。点 Build 后按钮旁显示 building 与转圈。Build 先调用模型把想法整理成固定格式的探测规格（元数据 / 要做什么 / 输出 JSON / 约束，见 `skills/board-client-extension`），写入只读 `intent`，再按该规格一次性生成脚本或 HTTP 配置。Build 成功后才能启用/停用。保存 overlay 才把 `enabled` 等写入 YAML 并 reload。直接编辑 YAML **不应当**新写 `intent`；用手写 `command`（落在 `extensions/custom/`）或原 `collectors.http.targets` / `collectors.probes.scripts`。Load 仍接受已有带 `intent` 的文件。给 agent 的说明见 `skills/board-client-extension`。
 
 ## 15. Cursor 与 Agent 集成
 
@@ -1359,6 +1359,8 @@ Health 文案：在线 / 离线 / 延迟（stale）/ 降级 / 未知 / 已禁用
 #### 16.3.3 Machine Card
 
 必须显示：名称、`kind`、`machine_key`、health、最后上报、CPU / 内存 / 磁盘、网络 ↓/↑、服务 severity 计数、**有用的**状态列表、日志流。
+
+首页卡片置顶条默认只显示 `host-listen` / `nginx` / `docker` / `cron`。额外 service_key 由设置页勾选，写入 `settings.card_pin_keys`（不是 client YAML）。`GET /api/v1/board` 的 `pin_candidates` 列出当前有置顶或虚拟服务的其它 key。
 
 离线卡片降低不透明度，页脚前缀「最后数据」，不能让用户误以为是实时值。
 

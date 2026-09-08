@@ -106,6 +106,57 @@ func (c *Compiler) PrepareOne(ctx context.Context, p config.StatusProbe) (Ready,
 	return ready, prev, ok
 }
 
+// TrialOne re-runs a compiled artifact without calling the model.
+func (c *Compiler) TrialOne(ctx context.Context, p config.StatusProbe) Preview {
+	if p.Kind == "" {
+		p.Kind = config.StatusProbeMetric
+	}
+	if p.Name == "" {
+		p.Name = p.Key
+	}
+	timeout := p.Timeout.Duration
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	if p.Kind == config.StatusProbeHTTP {
+		target, err := readHTTPTarget(c.httpPath(p.Key), p)
+		if err != nil && c.LegacyDir != "" {
+			target, err = readHTTPTarget(filepath.Join(c.LegacyDir, p.Key+".http.json"), p)
+		}
+		if err != nil {
+			prev := Preview{Kind: p.Kind, Error: "请先 Build 成功再预览"}
+			c.writePreview(p.Key, prev)
+			return prev
+		}
+		prev := httpPreview(target, p)
+		c.writePreview(p.Key, prev)
+		return prev
+	}
+	scriptPath := c.scriptPath(p.Key)
+	if probe.CheckScript(scriptPath) != nil && c.LegacyDir != "" {
+		scriptPath = filepath.Join(c.LegacyDir, p.Key+".sh")
+	}
+	if err := probe.CheckScript(scriptPath); err != nil {
+		prev := Preview{Kind: p.Kind, Error: "请先 Build 成功再预览"}
+		c.writePreview(p.Key, prev)
+		return prev
+	}
+	out, _, err := probe.RunScript(ctx, []string{scriptPath}, timeout, 0)
+	if err != nil {
+		prev := Preview{Kind: p.Kind, Error: err.Error(), Output: string(out)}
+		c.writePreview(p.Key, prev)
+		return prev
+	}
+	if _, err := probe.ParseJSON(out); err != nil {
+		prev := Preview{Kind: p.Kind, Error: "trial json: " + err.Error(), Output: string(out)}
+		c.writePreview(p.Key, prev)
+		return prev
+	}
+	prev := Preview{OK: true, Kind: p.Kind, Output: string(out)}
+	c.writePreview(p.Key, prev)
+	return prev
+}
+
 func (c *Compiler) prepareOne(ctx context.Context, p config.StatusProbe) (Ready, Preview, bool) {
 	if p.Kind == "" {
 		p.Kind = config.StatusProbeMetric
@@ -245,7 +296,7 @@ func (c *Compiler) reuseOld(base Ready, p config.StatusProbe) (Ready, bool) {
 }
 
 func (c *Compiler) generateScript(ctx context.Context, p config.StatusProbe) (string, error) {
-	untrusted := "key=" + p.Key + "\nintent=" + p.Intent
+	untrusted := "key=" + p.Key + "\nspec=\n" + p.Intent
 	if p.Path != "" {
 		untrusted += "\npath=" + p.Path
 	}
@@ -303,7 +354,7 @@ func (c *Compiler) prepareHTTP(ctx context.Context, p config.StatusProbe, base R
 	}
 	res, err := c.Provider.Run(ctx, aiprovider.Request{
 		Task:      "http_probe_config",
-		Untrusted: "key=" + p.Key + "\nintent=" + p.Intent,
+		Untrusted: "key=" + p.Key + "\nspec=\n" + p.Intent,
 		WantJSON:  true,
 		Timeout:   120 * time.Second,
 		MaxRunes:  2000,

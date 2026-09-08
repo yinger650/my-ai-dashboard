@@ -2,13 +2,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Copy, Database, KeyRound, Server, Shield, Terminal } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api";
-import type { Machine, TokenInfo } from "../types";
+import type { Board, Machine, TokenInfo } from "../types";
 import { fmtBytes, localTime } from "../format";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { Switch } from "../components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { DEFAULT_CARD_PINS } from "../lib/board-card";
 
 interface CreatedToken {
   id: string;
@@ -25,6 +27,7 @@ interface AdminSettings {
   board_txt_url?: string;
   ingest_url?: string;
   board_layout?: unknown;
+  card_pin_keys?: string[];
   [k: string]: unknown;
 }
 
@@ -41,6 +44,7 @@ export function SettingsPage() {
   const tokens = useQuery({ queryKey: ["admin-tokens"], queryFn: () => apiGet<TokenInfo[]>("/api/v1/admin/tokens") });
   const settings = useQuery({ queryKey: ["admin-settings"], queryFn: () => apiGet<AdminSettings>("/api/v1/admin/settings") });
   const totp = useQuery({ queryKey: ["admin-totp"], queryFn: () => apiGet<{ enabled: boolean }>("/api/v1/admin/totp") });
+  const board = useQuery({ queryKey: ["board"], queryFn: () => apiGet<Board>("/api/v1/board") });
 
   const [mKey, setMKey] = useState("");
   const [mName, setMName] = useState("");
@@ -137,6 +141,14 @@ export function SettingsPage() {
     },
   });
 
+  const savePins = useMutation({
+    mutationFn: (keys: string[]) => apiPatch("/api/v1/admin/settings", { card_pin_keys: keys }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-settings"] });
+      qc.invalidateQueries({ queryKey: ["board"] });
+    },
+  });
+
   const startTotp = useMutation({
     mutationFn: () => apiPost<{ secret: string; otpauth_url: string }>("/api/v1/admin/totp/setup", {}),
     onSuccess: (data) => {
@@ -193,7 +205,7 @@ export function SettingsPage() {
           <CardTitle className="flex items-center gap-2">
             <Server className="h-4 w-4 text-indigo-400" /> 看板
           </CardTitle>
-          <CardDescription>标题、轮询间隔与网格布局</CardDescription>
+          <CardDescription>标题、轮询间隔、网格布局与首页置顶</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-wrap items-end gap-3">
@@ -230,6 +242,25 @@ export function SettingsPage() {
               重置网格布局
             </Button>
           </div>
+          <CardPinChecks
+            selected={
+              Array.isArray(settings.data?.card_pin_keys)
+                ? settings.data.card_pin_keys
+                : (board.data?.card_pin_keys ?? [])
+            }
+            candidates={board.data?.pin_candidates ?? []}
+            pending={savePins.isPending}
+            onToggle={(key, on) => {
+              const next = new Set(
+                Array.isArray(settings.data?.card_pin_keys)
+                  ? settings.data.card_pin_keys
+                  : (board.data?.card_pin_keys ?? []),
+              );
+              if (on) next.add(key);
+              else next.delete(key);
+              savePins.mutate([...next].sort());
+            }}
+          />
         </CardContent>
       </Card>
 
@@ -516,6 +547,56 @@ export function SettingsPage() {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function CardPinChecks({
+  selected,
+  candidates,
+  pending,
+  onToggle,
+}: {
+  selected: string[];
+  candidates: { service_key: string; name: string }[];
+  pending: boolean;
+  onToggle: (key: string, on: boolean) => void;
+}) {
+  const extra = new Set(selected);
+  return (
+    <div>
+      <Label>首页置顶</Label>
+      <p className="mb-2 text-xs text-slate-500">
+        机器卡片日志区上方的置顶条。默认四项始终显示；自然语言扩展等其它服务有置顶后可在此勾选。
+      </p>
+      <div className="flex flex-col gap-2">
+        {DEFAULT_CARD_PINS.map((p) => (
+          <label key={p.key} className="flex items-center gap-2 text-sm text-slate-400">
+            <Switch id={`pin-default-${p.key}`} checked disabled />
+            <span>
+              {p.name}
+              <span className="ml-2 font-mono text-[11px] text-slate-600">{p.key}</span>
+            </span>
+          </label>
+        ))}
+        {candidates.map((c) => (
+          <label key={c.service_key} className="flex items-center gap-2 text-sm text-slate-200">
+            <Switch
+              id={`pin-${c.service_key}`}
+              checked={extra.has(c.service_key)}
+              disabled={pending}
+              onCheckedChange={(on) => onToggle(c.service_key, on)}
+            />
+            <span>
+              {c.name || c.service_key}
+              <span className="ml-2 font-mono text-[11px] text-slate-500">{c.service_key}</span>
+            </span>
+          </label>
+        ))}
+        {candidates.length === 0 && (
+          <p className="text-xs text-slate-600">暂无其它可置顶服务。启用自然语言扩展并产生置顶后会出现在这里。</p>
+        )}
+      </div>
     </div>
   );
 }

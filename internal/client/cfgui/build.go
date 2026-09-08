@@ -107,15 +107,24 @@ func (m *Model) buildAt(idx int) (statusprobe.Preview, error) {
 	if strings.TrimSpace(p.Key) == "" {
 		return statusprobe.Preview{}, fmt.Errorf("key 为空")
 	}
-	if strings.TrimSpace(p.Intent) == "" && len(p.Command) == 0 {
-		return statusprobe.Preview{}, fmt.Errorf("请先填写自然语言描述")
+	idea := strings.TrimSpace(p.Idea)
+	if strings.TrimSpace(p.Intent) == "" && idea == "" && len(p.Command) == 0 {
+		return statusprobe.Preview{}, fmt.Errorf("请先填写你的想法")
 	}
 	comp, err := m.newCompiler()
 	if err != nil {
 		return statusprobe.Preview{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 210*time.Second)
 	defer cancel()
+	if idea != "" {
+		spec, expErr := comp.ExpandSpec(ctx, p, idea)
+		if expErr != nil {
+			return statusprobe.Preview{}, expErr
+		}
+		statusprobe.ApplyIdea(&m.Probes[idx], spec)
+		p = m.Probes[idx]
+	}
 	ready, prev, ok := comp.PrepareOne(ctx, p)
 	if m.Previews == nil {
 		m.Previews = map[string]string{}
@@ -126,6 +135,49 @@ func (m *Model) buildAt(idx int) (statusprobe.Preview, error) {
 		statusprobe.ApplyBuildResult(&m.Probes[idx], ready)
 	}
 	if !prev.OK && prev.Error != "" && !ok {
+		return prev, fmt.Errorf("%s", prev.Error)
+	}
+	return prev, nil
+}
+
+func (m *Model) previewAt(idx int) (statusprobe.Preview, error) {
+	if idx < 0 || idx >= len(m.Probes) {
+		return statusprobe.Preview{}, fmt.Errorf("编号无效")
+	}
+	p := m.Probes[idx]
+	if strings.TrimSpace(p.Key) == "" {
+		return statusprobe.Preview{}, fmt.Errorf("key 为空")
+	}
+	dir := strings.TrimSpace(p.Dir)
+	if dir == "" {
+		dir = config.NLRelDir(p.Key)
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(m.ExtRoot, dir)
+	}
+	cached := statusprobe.ReadPreview(dir)
+	if text := previewText(cached); text != "" {
+		if m.Previews == nil {
+			m.Previews = map[string]string{}
+		}
+		m.Previews[p.Key] = text
+		if !cached.OK && cached.Error != "" {
+			return cached, fmt.Errorf("%s", cached.Error)
+		}
+		return cached, nil
+	}
+	comp, err := m.newCompiler()
+	if err != nil {
+		return statusprobe.Preview{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	prev := comp.TrialOne(ctx, p)
+	if m.Previews == nil {
+		m.Previews = map[string]string{}
+	}
+	m.Previews[p.Key] = previewText(prev)
+	if !prev.OK && prev.Error != "" {
 		return prev, fmt.Errorf("%s", prev.Error)
 	}
 	return prev, nil
