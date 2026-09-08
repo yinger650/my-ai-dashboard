@@ -71,3 +71,76 @@ describe("SettingsPage log storage", () => {
     });
   });
 });
+
+describe("SettingsPage API keys", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/v1/admin/machines")) {
+          return jsonOk([
+            {
+              id: "m1",
+              machine_key: "agents",
+              name: "Agents",
+              kind: "physical",
+              description: "",
+              os: null,
+              arch: null,
+              hostname: null,
+              collector_version: null,
+              boot_id: null,
+              heartbeat_interval_seconds: 30,
+              last_seen_at: null,
+              enabled: true,
+            },
+          ]);
+        }
+        if (url.includes("/api/v1/admin/tokens")) {
+          return jsonOk([
+            {
+              id: "tok-m",
+              name: "Agents machine token",
+              token_prefix: "abp_m_NN6QSo",
+              scope: "machine_ingest",
+              machine_id: "m1",
+              service_id: null,
+              last_used_at: null,
+              last_used_ip: null,
+              enabled: true,
+              revoked_at: null,
+            },
+          ]);
+        }
+        if (url.includes("/api/v1/admin/totp")) return jsonOk({ enabled: false });
+        if (url.includes("/api/v1/admin/settings")) {
+          return jsonOk({
+            board_title: "AgentBoard Personal",
+            timezone: "UTC",
+            poll_interval_seconds: 15,
+            event_retention_days: 30,
+            event_quota_bytes: 5 * 1024 * 1024 * 1024,
+          });
+        }
+        return jsonOk({});
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("does not present machine tokens as viewer keys", async () => {
+    renderSettings();
+    expect(await screen.findByText("Agents machine token")).toBeInTheDocument();
+    expect(screen.getByText("Machine Token")).toBeInTheDocument();
+    expect(screen.getByText("Viewer Token")).toBeInTheDocument();
+    expect(screen.getByText("还没有 Viewer Token。")).toBeInTheDocument();
+    expect(screen.getByText("abp_m_NN6QSo…")).toBeInTheDocument();
+    expect(screen.getAllByText("agents").length).toBeGreaterThan(0);
+    expect(screen.getByText("上报")).toBeInTheDocument();
+    expect(screen.queryByText("machine_ingest")).not.toBeInTheDocument();
+  });
+});

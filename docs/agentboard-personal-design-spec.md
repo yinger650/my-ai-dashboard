@@ -1408,9 +1408,9 @@ Runs 可多选 / 取消；未选中时日志列显示全部，选中后只显示
 
 ### 16.7 Settings
 
-单页「设置」，卡片：看板、访问信息、双因素认证（TOTP）、机器、API Key。
+单页「设置」，卡片：看板、访问信息、双因素认证（TOTP）、机器、Viewer Token。
 
-已支持：修改标题 / 时区 / 轮询间隔；创建机器 + Machine Token；创建 / 吊销 Viewer Token；启用/停用 TOTP 与恢复码；重置网格布局。
+已支持：修改标题 / 时区 / 轮询间隔；创建机器 + Machine Token；创建 / 吊销 Viewer Token；启用/停用 TOTP 与恢复码；重置网格布局。Machine Token（上报，`abp_m_`）列在「机器」卡片里；下方 Viewer Token 卡片只列只读 `abp_v_`，避免把创建机器时生成的上报密钥当成 Viewer。
 
 Token 创建后一次性 Dialog：「请立即复制保存，关闭后无法再次查看。」提供复制，不自动复制。
 
