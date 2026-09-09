@@ -68,9 +68,8 @@ export function SettingsPage() {
   });
 
   const [tName, setTName] = useState("");
-  const [tScope, setTScope] = useState("viewer");
   const createToken = useMutation({
-    mutationFn: () => apiPost<CreatedToken>("/api/v1/admin/tokens", { name: tName, scope: tScope }),
+    mutationFn: () => apiPost<CreatedToken>("/api/v1/admin/tokens", { name: tName, scope: "viewer" }),
     onSuccess: (data) => {
       setRevealToken(data);
       setTName("");
@@ -321,7 +320,7 @@ export function SettingsPage() {
           <CardTitle className="flex items-center gap-2">
             <Terminal className="h-4 w-4 text-indigo-400" /> 访问信息
           </CardTitle>
-          <CardDescription>给 Agent / curl / TUI 使用的入口。Viewer Token 见下方 API Key。</CardDescription>
+          <CardDescription>给 Agent / curl / TUI 使用的入口。只读密钥见下方 Viewer Token。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
           <CopyRow label="看板 URL" value={publicUrl || "（未配置 ABP_PUBLIC_URL）"} onCopy={() => copy(publicUrl, "url")} copied={copied === "url"} />
@@ -455,68 +454,62 @@ export function SettingsPage() {
               ))}
             </tbody>
           </table>
+          <div className="mt-6">
+            <TokenGroup
+              title="Machine Token"
+              hint="前缀 abp_m_，绑定上面某一台机器，只能上报不能读看板。吊销后该机 ingest 会 401。"
+              empty="还没有 Machine Token。"
+              tokens={(tokens.data ?? []).filter((t) => t.scope === "machine_ingest")}
+              machines={machines.data ?? []}
+              onRevoke={(id) => revoke.mutate(id)}
+            />
+          </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <KeyRound className="h-4 w-4 text-indigo-400" /> API Key
+            <KeyRound className="h-4 w-4 text-indigo-400" /> Viewer Token
           </CardTitle>
-          <CardDescription>Viewer Token 用于 curl / 只读看板；Machine Token 在创建机器时生成。</CardDescription>
+          <CardDescription>
+            只读看板（<span className="font-mono">abp_v_</span>），给 curl / board.txt 用。不会随机器自动生成，全看板通常一把就够。Machine
+            Token（<span className="font-mono">abp_m_</span>）在上方「机器」卡片里。
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="mb-4 flex flex-wrap items-end gap-2">
-            <Input value={tName} onChange={(e) => setTName(e.target.value)} placeholder="Token 名称" className="w-52" />
-            <select
-              value={tScope}
-              onChange={(e) => setTScope(e.target.value)}
-              className="h-9 rounded-md border border-slate-700 bg-slate-900 px-3 text-sm"
-            >
-              <option value="viewer">viewer</option>
-            </select>
+            <Input value={tName} onChange={(e) => setTName(e.target.value)} placeholder="Viewer 名称" className="w-52" />
             <Button disabled={!tName || createToken.isPending} onClick={() => createToken.mutate()}>
               创建 Viewer Token
             </Button>
           </div>
-          <table className="w-full text-left text-sm">
-            <thead className="text-xs text-slate-500">
-              <tr>
-                <th className="py-1">名称</th>
-                <th>前缀</th>
-                <th>scope</th>
-                <th>最后使用</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(tokens.data ?? []).map((t) => (
-                <tr key={t.id} className="border-t border-slate-800/50">
-                  <td className="py-1.5">{t.name}</td>
-                  <td className="font-mono text-xs">{t.token_prefix}…</td>
-                  <td>{t.scope}</td>
-                  <td className="text-xs text-slate-500">{t.last_used_at ? localTime(t.last_used_at) : "从未"}</td>
-                  <td className="text-right">
-                    {t.revoked_at ? (
-                      <span className="text-xs text-slate-500">已吊销</span>
-                    ) : (
-                      <Button variant="ghost" size="sm" className="sev-error" onClick={() => revoke.mutate(t.id)}>
-                        吊销
-                      </Button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <TokenGroup
+            title="只读 Viewer"
+            hint="没有 Viewer 时这里是空的，不会把 Machine Token 混进来。"
+            empty="还没有 Viewer Token。"
+            tokens={(tokens.data ?? []).filter((t) => t.scope === "viewer")}
+            onRevoke={(id) => revoke.mutate(id)}
+          />
+          {(tokens.data ?? []).some((t) => t.scope !== "viewer" && t.scope !== "machine_ingest") && (
+            <TokenGroup
+              title="其它"
+              hint=""
+              empty=""
+              tokens={(tokens.data ?? []).filter((t) => t.scope !== "viewer" && t.scope !== "machine_ingest")}
+              onRevoke={(id) => revoke.mutate(id)}
+            />
+          )}
         </CardContent>
       </Card>
 
       <Dialog open={!!revealToken} onOpenChange={(o) => !o && setRevealToken(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Token 已创建</DialogTitle>
-            <DialogDescription>请立即复制保存，关闭后无法再次查看。</DialogDescription>
+            <DialogTitle>
+              {revealToken?.scope === "viewer" ? "Viewer Token 已创建" : "Machine Token 已创建"}
+            </DialogTitle>
+            <DialogDescription>请立即复制保存，关闭后无法再次查看。Viewer 不能用来上报。</DialogDescription>
           </DialogHeader>
           <div className="mb-4 break-all rounded-md bg-slate-900 p-3 font-mono text-sm">{revealToken?.token}</div>
           <div className="flex justify-end gap-2">
@@ -620,6 +613,80 @@ function CopyRow({
         <Copy className="h-3.5 w-3.5" />
         {copied ? "已复制" : "复制"}
       </Button>
+    </div>
+  );
+}
+
+export function tokenKindLabel(scope: string): string {
+  switch (scope) {
+    case "machine_ingest":
+      return "上报";
+    case "viewer":
+      return "只读";
+    case "service_ingest":
+      return "单服务上报";
+    default:
+      return scope;
+  }
+}
+
+function TokenGroup({
+  title,
+  hint,
+  empty,
+  tokens,
+  machines,
+  onRevoke,
+}: {
+  title: string;
+  hint: string;
+  empty: string;
+  tokens: TokenInfo[];
+  machines?: Machine[];
+  onRevoke: (id: string) => void;
+}) {
+  const showMachine = Boolean(machines) && tokens.some((t) => t.machine_id);
+  const machineKey = (id: string | null) => machines?.find((m) => m.id === id)?.machine_key ?? "—";
+  return (
+    <div className="mb-6 last:mb-0">
+      <div className="mb-1 text-sm font-medium text-slate-200">{title}</div>
+      {hint ? <p className="mb-2 text-xs text-slate-500">{hint}</p> : null}
+      {tokens.length === 0 ? (
+        <p className="text-sm text-slate-500">{empty}</p>
+      ) : (
+        <table className="w-full text-left text-sm">
+          <thead className="text-xs text-slate-500">
+            <tr>
+              <th className="py-1">名称</th>
+              <th>前缀</th>
+              {showMachine ? <th>机器</th> : null}
+              <th>类型</th>
+              <th>最后使用</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {tokens.map((t) => (
+              <tr key={t.id} className="border-t border-slate-800/50">
+                <td className="py-1.5">{t.name}</td>
+                <td className="font-mono text-xs">{t.token_prefix}…</td>
+                {showMachine ? <td className="font-mono text-xs">{machineKey(t.machine_id)}</td> : null}
+                <td>{tokenKindLabel(t.scope)}</td>
+                <td className="text-xs text-slate-500">{t.last_used_at ? localTime(t.last_used_at) : "从未"}</td>
+                <td className="text-right">
+                  {t.revoked_at ? (
+                    <span className="text-xs text-slate-500">已吊销</span>
+                  ) : (
+                    <Button variant="ghost" size="sm" className="sev-error" onClick={() => onRevoke(t.id)}>
+                      吊销
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
