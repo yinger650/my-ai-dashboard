@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { NavLink, useNavigate } from "react-router-dom";
 import { LogOut } from "lucide-react";
-import { logout } from "../api";
+import { fetchSession, logout } from "../api";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
@@ -15,6 +15,7 @@ const navItems = [
 export function Layout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const session = useQuery({ queryKey: ["session"], queryFn: fetchSession });
 
   async function handleLogout() {
     await logout();
@@ -49,10 +50,17 @@ export function Layout({ children }: { children: ReactNode }) {
               ))}
             </nav>
           </div>
-          <Button variant="outline" size="sm" onClick={handleLogout}>
-            <LogOut className="h-4 w-4" />
-            <span className="hidden sm:inline">退出</span>
-          </Button>
+          <div className="flex items-center gap-3">
+            {session.data?.display_name && (
+              <span className="hidden max-w-[12rem] truncate text-xs text-slate-400 sm:inline">
+                {session.data.display_name}
+              </span>
+            )}
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">退出</span>
+            </Button>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-[1600px] px-4 py-5">{children}</main>

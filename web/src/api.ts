@@ -92,6 +92,17 @@ export interface SessionInfo {
   totp_enabled?: boolean;
   expires_at?: string;
   csrf_token?: string;
+  edition?: "personal" | "feishu";
+  display_name?: string;
+  workspace_slug?: string;
+}
+
+export interface AuthMeta {
+  edition: "personal" | "feishu";
+}
+
+export async function fetchAuthMeta(): Promise<AuthMeta> {
+  return apiGet<AuthMeta>("/auth/meta");
 }
 
 export async function fetchSession(): Promise<SessionInfo> {

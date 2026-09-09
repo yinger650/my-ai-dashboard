@@ -14,6 +14,7 @@ const (
 	ctxToken
 	ctxSession
 	ctxAccess
+	ctxTenant
 )
 
 // accessInfo accumulates data for the access log entry for a request.

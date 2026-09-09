@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"agentboard/internal/api"
 	"agentboard/internal/auth"
 	"agentboard/internal/shared"
@@ -22,6 +24,13 @@ func (s *Server) sessionCookieName() string {
 		return "__Host-abp_session"
 	}
 	return "abp_session"
+}
+
+func (s *Server) sessionSameSite() http.SameSite {
+	if s.feishuMode() {
+		return http.SameSiteLaxMode
+	}
+	return http.SameSiteStrictMode
 }
 
 func (s *Server) markAbnormal(r *http.Request, result, reason string) {
@@ -51,8 +60,14 @@ func (s *Server) mwTokenAuth(next http.Handler) http.Handler {
 		}
 		full := strings.TrimSpace(strings.TrimPrefix(authz, "Bearer "))
 		hash := auth.HashToken(full)
+		st := s.db(r)
+		if st == nil {
+			s.markAbnormal(r, "unauthorized", "unknown token")
+			api.WriteError(w, http.StatusUnauthorized, api.CodeUnauthorized, "unauthorized", rid)
+			return
+		}
 
-		tok, err := s.st.GetTokenByHash(r.Context(), hash)
+		tok, err := st.GetTokenByHash(r.Context(), hash)
 		if errors.Is(err, store.ErrNotFound) {
 			s.markAbnormal(r, "unauthorized", "unknown token")
 			api.WriteError(w, http.StatusUnauthorized, api.CodeUnauthorized, "unauthorized", rid)
@@ -99,11 +114,11 @@ func (s *Server) mwTokenAuth(next http.Handler) http.Handler {
 		s.setActor(r, actorType, &tok.ID)
 
 		// Async last-used update.
-		go func(id, ip string) {
+		go func(st *store.Store, id, ip string) {
 			c, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			_ = s.st.TouchTokenUsed(c, id, ip)
-		}(tok.ID, clientIP(r.Context()))
+			_ = st.TouchTokenUsed(c, id, ip)
+		}(st, tok.ID, clientIP(r.Context()))
 
 		ctx := context.WithValue(r.Context(), ctxToken, tok)
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -133,10 +148,32 @@ func (s *Server) mwAdminSession(next http.Handler) http.Handler {
 			api.WriteError(w, http.StatusUnauthorized, api.CodeUnauthorized, "unauthorized", rid)
 			return
 		}
+		if !s.sessionMatchesSlug(r, sess) {
+			s.markAbnormal(r, "forbidden", "workspace mismatch")
+			api.WriteError(w, http.StatusForbidden, api.CodeForbidden, "forbidden", rid)
+			return
+		}
+		r2, err := s.attachSessionTenant(r, sess)
+		if err != nil {
+			api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
+			return
+		}
+		r = r2
 		s.setActor(r, "admin", &sess.ID)
 		ctx := context.WithValue(r.Context(), ctxSession, sess)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (s *Server) sessionMatchesSlug(r *http.Request, sess *store.Session) bool {
+	if s.hub == nil || sess == nil {
+		return true
+	}
+	slug := chi.URLParam(r, "slug")
+	if slug == "" || sess.WorkspaceSlug == "" {
+		return true
+	}
+	return slug == sess.WorkspaceSlug
 }
 
 func (s *Server) loadSession(r *http.Request) (*store.Session, bool) {
@@ -144,8 +181,17 @@ func (s *Server) loadSession(r *http.Request) (*store.Session, bool) {
 	if err != nil || c.Value == "" {
 		return nil, false
 	}
-	sess, err := s.st.GetSessionByTokenHash(r.Context(), auth.HashToken(c.Value))
-	if err != nil {
+	hash := auth.HashToken(c.Value)
+	var sess *store.Session
+	var gerr error
+	if s.hub != nil {
+		sess, gerr = s.hub.Control().GetSessionByTokenHash(r.Context(), hash)
+	} else if s.st != nil {
+		sess, gerr = s.st.GetSessionByTokenHash(r.Context(), hash)
+	} else {
+		return nil, false
+	}
+	if gerr != nil {
 		return nil, false
 	}
 	exp, err := shared.ParseTime(sess.ExpiresAt)
@@ -185,16 +231,33 @@ func (s *Server) mwViewerOrAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rid := requestID(r.Context())
 		if sess, ok := s.loadSession(r); ok {
+			if !s.sessionMatchesSlug(r, sess) {
+				s.markAbnormal(r, "forbidden", "workspace mismatch")
+				api.WriteError(w, http.StatusForbidden, api.CodeForbidden, "forbidden", rid)
+				return
+			}
+			r2, err := s.attachSessionTenant(r, sess)
+			if err != nil {
+				api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
+				return
+			}
+			r = r2
 			s.setActor(r, "admin", &sess.ID)
 			ctx := context.WithValue(r.Context(), ctxSession, sess)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		// Try viewer token.
+		// Try viewer token against the current tenant store.
+		st := s.db(r)
+		if st == nil {
+			s.markAbnormal(r, "unauthorized", "no admin session or viewer token")
+			api.WriteError(w, http.StatusUnauthorized, api.CodeUnauthorized, "unauthorized", rid)
+			return
+		}
 		authz := r.Header.Get("Authorization")
 		if strings.HasPrefix(authz, "Bearer ") {
 			full := strings.TrimSpace(strings.TrimPrefix(authz, "Bearer "))
-			tok, err := s.st.GetTokenByHash(r.Context(), auth.HashToken(full))
+			tok, err := st.GetTokenByHash(r.Context(), auth.HashToken(full))
 			if err == nil && tok.Enabled && tok.RevokedAt == nil && tok.Scope == auth.ScopeViewer {
 				if !s.limiter.Allow("tok:"+tok.ID, 60) {
 					api.WriteError(w, http.StatusTooManyRequests, api.CodeRateLimited, "rate limited", rid)

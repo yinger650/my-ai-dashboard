@@ -61,11 +61,15 @@ func (s *Server) mwRecover(next http.Handler) http.Handler {
 func (s *Server) mwSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		h.Set("Content-Security-Policy", s.contentSecurityPolicy())
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		h.Set("X-Frame-Options", "DENY")
+		if s.feishuMode() {
+			h.Set("X-Frame-Options", "SAMEORIGIN")
+		} else {
+			h.Set("X-Frame-Options", "DENY")
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -173,14 +177,25 @@ func (s *Server) mwAccessLog(next http.Handler) http.Handler {
 			IsAbnormal: ai.isAbnormal,
 		}
 		// Write access log in the background so it never blocks the response.
-		go func() {
+		go func(st *store.Store) {
+			if st == nil {
+				return
+			}
 			c, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			if err := s.st.InsertAccessLog(c, entry); err != nil {
+			if err := st.InsertAccessLog(c, entry); err != nil {
 				s.log.Warn("insert access log failed", "err", err)
 			}
-		}()
+		}(s.db(r))
 	})
+}
+
+func (s *Server) contentSecurityPolicy() string {
+	csp := "default-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'"
+	if s.feishuMode() {
+		return csp + "; frame-ancestors https://*.feishu.cn https://*.larkoffice.com https://*.larksuite.com 'self'"
+	}
+	return csp + "; frame-ancestors 'none'"
 }
 
 func strPtr(s string) *string {

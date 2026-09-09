@@ -26,7 +26,7 @@ func (s *Server) failLogin(w http.ResponseWriter, r *http.Request, rid string, a
 		lockedUntil = &t
 		attempts = 0
 	}
-	_ = s.st.SetFailedAttempts(r.Context(), attempts, lockedUntil)
+	_ = s.db(r).SetFailedAttempts(r.Context(), attempts, lockedUntil)
 	s.markAbnormal(r, "unauthorized", "bad credentials")
 	api.WriteError(w, http.StatusUnauthorized, api.CodeUnauthorized, "unauthorized", rid)
 }
@@ -55,13 +55,13 @@ func (s *Server) verifyTOTPOrRecovery(r *http.Request, creds *store.AdminCredent
 	}
 	hashes[idx] = ""
 	raw, _ := json.Marshal(hashes)
-	_ = s.st.SetRecoveryCodesHashJSON(r.Context(), string(raw))
+	_ = s.db(r).SetRecoveryCodesHashJSON(r.Context(), string(raw))
 	return true
 }
 
 func (s *Server) handleTOTPStatus(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
-	creds, err := s.st.GetAdminCredentials(r.Context())
+	creds, err := s.db(r).GetAdminCredentials(r.Context())
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -75,7 +75,7 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "secret key not configured", rid)
 		return
 	}
-	creds, err := s.st.GetAdminCredentials(r.Context())
+	creds, err := s.db(r).GetAdminCredentials(r.Context())
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -95,7 +95,7 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pending, _ := json.Marshal(enc)
-	if err := s.st.SetSetting(r.Context(), totpPendingKey, string(pending)); err != nil {
+	if err := s.db(r).SetSetting(r.Context(), totpPendingKey, string(pending)); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
@@ -117,7 +117,7 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusBadRequest, api.CodeInvalidJSON, "invalid json", rid)
 		return
 	}
-	raw, err := s.st.GetSetting(r.Context(), totpPendingKey)
+	raw, err := s.db(r).GetSetting(r.Context(), totpPendingKey)
 	if err != nil {
 		api.WriteError(w, http.StatusUnprocessableEntity, api.CodeValidationFailed, "run totp setup first", rid)
 		return
@@ -139,11 +139,11 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hashJSON, _ := json.Marshal(hashes)
-	if err := s.st.SetAdminTOTP(r.Context(), enc, string(hashJSON)); err != nil {
+	if err := s.db(r).SetAdminTOTP(r.Context(), enc, string(hashJSON)); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	_ = s.st.SetSetting(r.Context(), totpPendingKey, `""`)
+	_ = s.db(r).SetSetting(r.Context(), totpPendingKey, `""`)
 	api.WriteData(w, rid, map[string]any{
 		"enabled":        true,
 		"recovery_codes": plain,
@@ -157,7 +157,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusBadRequest, api.CodeInvalidJSON, "invalid json", rid)
 		return
 	}
-	creds, err := s.st.GetAdminCredentials(r.Context())
+	creds, err := s.db(r).GetAdminCredentials(r.Context())
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -173,7 +173,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusUnauthorized, api.CodeUnauthorized, "unauthorized", rid)
 		return
 	}
-	if err := s.st.ClearAdminTOTP(r.Context()); err != nil {
+	if err := s.db(r).ClearAdminTOTP(r.Context()); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
@@ -187,7 +187,7 @@ func (s *Server) handleTOTPRecovery(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusBadRequest, api.CodeInvalidJSON, "invalid json", rid)
 		return
 	}
-	creds, err := s.st.GetAdminCredentials(r.Context())
+	creds, err := s.db(r).GetAdminCredentials(r.Context())
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -208,7 +208,7 @@ func (s *Server) handleTOTPRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hashJSON, _ := json.Marshal(hashes)
-	if err := s.st.SetRecoveryCodesHashJSON(r.Context(), string(hashJSON)); err != nil {
+	if err := s.db(r).SetRecoveryCodesHashJSON(r.Context(), string(hashJSON)); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}

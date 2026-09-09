@@ -31,6 +31,14 @@ type Config struct {
 	ClientUpdateToken  string
 	ClientUpdateSource string
 	ClientUpdateSync   bool
+
+	// Feishu edition (board-server-feishu). Empty in personal edition.
+	FeishuAppID        string
+	FeishuAppSecret    string
+	FeishuRedirectURI  string
+	FeishuTenantKey    string
+	FeishuAPIBase      string
+	FeishuAuthorizeURL string
 }
 
 func getenv(key, def string) string {
@@ -87,6 +95,12 @@ func Load() (*Config, error) {
 		SecretKeyEnv:       os.Getenv("ABP_SECRET_KEY"),
 		ClientUpdateToken:  os.Getenv("ABP_CLIENT_UPDATE_TOKEN"),
 		ClientUpdateSource: getenv("ABP_CLIENT_UPDATE_SOURCE", "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"),
+		FeishuAppID:        os.Getenv("ABP_FEISHU_APP_ID"),
+		FeishuAppSecret:    os.Getenv("ABP_FEISHU_APP_SECRET"),
+		FeishuRedirectURI:  os.Getenv("ABP_FEISHU_REDIRECT_URI"),
+		FeishuTenantKey:    os.Getenv("ABP_FEISHU_TENANT_KEY"),
+		FeishuAPIBase:      getenv("ABP_FEISHU_API_BASE", "https://open.feishu.cn"),
+		FeishuAuthorizeURL: getenv("ABP_FEISHU_AUTHORIZE_URL", "https://accounts.feishu.cn/open-apis/authen/v1/authorize"),
 	}
 
 	var err error
@@ -129,6 +143,20 @@ func Load() (*Config, error) {
 		// local/dev startup is not blocked. Callers may warn on this.
 		c.PublicURL = "http://" + c.ListenAddr
 	}
+	if c.FeishuRedirectURI == "" && c.PublicURL != "" {
+		c.FeishuRedirectURI = strings.TrimRight(c.PublicURL, "/") + "/auth/feishu/callback"
+	}
 
 	return c, nil
+}
+
+// ValidateFeishu reports whether Feishu edition required fields are set.
+func (c *Config) ValidateFeishu() error {
+	if strings.TrimSpace(c.FeishuAppID) == "" {
+		return fmt.Errorf("ABP_FEISHU_APP_ID is required")
+	}
+	if strings.TrimSpace(c.FeishuAppSecret) == "" {
+		return fmt.Errorf("ABP_FEISHU_APP_SECRET is required")
+	}
+	return nil
 }

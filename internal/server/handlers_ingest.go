@@ -36,7 +36,7 @@ func (s *Server) resolveIngestAuth(r *http.Request, tok *store.Token) (*store.In
 		if tok.MachineID == nil {
 			return nil, "token has no machine"
 		}
-		m, err := s.st.GetMachineByID(r.Context(), *tok.MachineID)
+		m, err := s.db(r).GetMachineByID(r.Context(), *tok.MachineID)
 		if err != nil {
 			return nil, "machine not found"
 		}
@@ -48,7 +48,7 @@ func (s *Server) resolveIngestAuth(r *http.Request, tok *store.Token) (*store.In
 		if tok.ServiceID == nil {
 			return nil, "token has no service"
 		}
-		svc, err := s.st.GetServiceByID(r.Context(), *tok.ServiceID)
+		svc, err := s.db(r).GetServiceByID(r.Context(), *tok.ServiceID)
 		if err != nil {
 			return nil, "service not found"
 		}
@@ -136,7 +136,7 @@ func (s *Server) handleIngestEvents(w http.ResponseWriter, r *http.Request) {
 			rejectedCount++
 			continue
 		}
-		res, err := s.st.IngestEvent(r.Context(), &env, *ingestAuth, receivedAt)
+		res, err := s.db(r).IngestEvent(r.Context(), &env, *ingestAuth, receivedAt)
 		if err != nil {
 			s.log.Error("ingest event failed", "err", err, "event_id", env.EventID)
 			results = append(results, result{EventID: env.EventID, Status: "rejected", Code: api.CodeInternalError, Message: "internal error"})
