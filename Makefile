@@ -38,6 +38,7 @@ test-web:
 build: build-web
 	mkdir -p $(BIN_DIR)
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/board-server ./cmd/board-server
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/board-server-feishu ./cmd/board-server-feishu
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/board-client ./cmd/board-client
 
 .PHONY: build-web
@@ -51,6 +52,8 @@ build-all: build-web dist-client
 	mkdir -p $(BIN_DIR)
 	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/board-server-linux-amd64 ./cmd/board-server
 	GOOS=linux GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/board-server-linux-arm64 ./cmd/board-server
+	GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/board-server-feishu-linux-amd64 ./cmd/board-server-feishu
+	GOOS=linux GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/board-server-feishu-linux-arm64 ./cmd/board-server-feishu
 	cp $(DIST_CLIENT)/board-client-linux-amd64 $(BIN_DIR)/board-client-linux-amd64
 	cp $(DIST_CLIENT)/board-client-linux-arm64 $(BIN_DIR)/board-client-linux-arm64
 

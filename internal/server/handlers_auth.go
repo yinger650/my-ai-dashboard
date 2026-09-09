@@ -104,11 +104,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	http.SetCookie(w, s.sessionCookie(sessTok, sess.ExpiresAt))
 	s.setActor(r, "admin", &sess.ID)
-	api.WriteData(w, rid, map[string]any{
-		"authenticated": true,
-		"expires_at":    sess.ExpiresAt,
-		"csrf_token":    csrfTok,
-	}, nil)
+	api.WriteData(w, rid, s.sessionPayload(sess, csrfTok, totpEnabled(creds)), nil)
 }
 
 func (s *Server) sessionCookie(value, expiresAt string) *http.Cookie {
@@ -118,7 +114,7 @@ func (s *Server) sessionCookie(value, expiresAt string) *http.Cookie {
 		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: s.sessionSameSite(),
 		Secure:   s.cfg.SecureCookies,
 		Expires:  exp,
 	}
@@ -128,12 +124,16 @@ func (s *Server) sessionCookie(value, expiresAt string) *http.Cookie {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	if sess := sessionFrom(r.Context()); sess != nil {
-		_ = s.st.DeleteSession(r.Context(), sess.ID)
+		if s.hub != nil {
+			_ = s.hub.Control().DeleteSession(r.Context(), sess.ID)
+		} else if s.st != nil {
+			_ = s.st.DeleteSession(r.Context(), sess.ID)
+		}
 	}
 	// Clear cookie.
 	http.SetCookie(w, &http.Cookie{
 		Name: s.sessionCookieName(), Value: "", Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteStrictMode, Secure: s.cfg.SecureCookies, MaxAge: -1,
+		SameSite: s.sessionSameSite(), Secure: s.cfg.SecureCookies, MaxAge: -1,
 	})
 	api.WriteData(w, rid, map[string]any{"authenticated": false}, nil)
 }
@@ -141,15 +141,16 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	enabled := false
-	if creds, err := s.st.GetAdminCredentials(r.Context()); err == nil {
-		enabled = totpEnabled(creds)
+	if !s.feishuMode() && s.st != nil {
+		if creds, err := s.st.GetAdminCredentials(r.Context()); err == nil {
+			enabled = totpEnabled(creds)
+		}
 	}
 	sess, ok := s.loadSession(r)
 	if !ok {
-		api.WriteData(w, rid, map[string]any{"authenticated": false, "totp_enabled": enabled}, nil)
+		api.WriteData(w, rid, map[string]any{"authenticated": false, "totp_enabled": enabled, "edition": s.edition}, nil)
 		return
 	}
-	// Issue a fresh CSRF token bound to this session.
 	csrfTok, csrfHash, err := auth.GenerateSessionToken()
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
@@ -159,15 +160,13 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	api.WriteData(w, rid, map[string]any{
-		"authenticated": true,
-		"expires_at":    sess.ExpiresAt,
-		"totp_enabled":  enabled,
-		"csrf_token":    csrfTok,
-	}, nil)
+	api.WriteData(w, rid, s.sessionPayload(sess, csrfTok, enabled), nil)
 }
 
 func (s *Server) updateSessionCSRF(r *http.Request, sessionID, csrfHash string) error {
+	if s.hub != nil {
+		return s.hub.Control().UpdateSessionCSRF(r.Context(), sessionID, csrfHash)
+	}
 	_, err := s.st.DB().ExecContext(r.Context(), `UPDATE admin_sessions SET csrf_token_hash = ? WHERE id = ?`, csrfHash, sessionID)
 	return err
 }

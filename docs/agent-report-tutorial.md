@@ -36,6 +36,8 @@ AGENTBOARD_TOKEN=abp_m_你的token
 AGENTBOARD_PROVIDER=cursor
 ```
 
+飞书 edition 的看板网页是站点根路径；`AGENTBOARD_URL` 必须带上设置页里的 8 位 slug，例如 `https://<飞书看板域名>/xxxxxxxx`。详见 [Feishu edition](./feishu-edition.md)。
+
 一个项目一把项目 Token。换项目就换 `.env`。
 
 （可选）本机再跑 `board-client`，Token 是另一把 `ABP_MACHINE_TOKEN`，配置见 [board-client 教程](./client-log-tutorial.md)，并勾选 **本机 ingest**。

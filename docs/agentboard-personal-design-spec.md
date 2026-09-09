@@ -140,6 +140,8 @@ Docker Compose / Caddy / 备份恢复 CLI、Playwright E2E、OpenAPI 与 `event-
 - 将 Cursor API Key 存储在 Board Server。
 - Viewer Token 写入采集接口。
 
+Personal edition（`board-server`）仍遵守以上条目。同仓库另有 **Feishu edition**（`board-server-feishu`）：企业内飞书用户各自一份看板，网页走根路径，ingest 走 `/{slug}`。见 [feishu-edition.md](feishu-edition.md)。该产物不是 1.x Personal 的默认行为，也不是本规格意义上的「团队协作」。
+
 ## 5. 术语和实体
 
 ### 5.1 Machine

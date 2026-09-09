@@ -22,7 +22,7 @@ type summarizeRequest struct {
 func (s *Server) handleSummarizeLogs(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	svc, err := s.st.GetServiceByID(r.Context(), id)
+	svc, err := s.db(r).GetServiceByID(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -37,7 +37,7 @@ func (s *Server) handleSummarizeLogs(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 100 {
 		limit = 40
 	}
-	logs, err := s.st.ListServiceLogs(r.Context(), id, "", limit)
+	logs, err := s.db(r).ListServiceLogs(r.Context(), id, "", limit)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -57,7 +57,7 @@ func (s *Server) handleSummarizeLogs(w http.ResponseWriter, r *http.Request) {
 		Payload:       mustJSON(event.LogPayload{Markdown: md, Severity: "info", Source: "summarize"}),
 	}
 	authz := store.IngestAuth{MachineID: svc.MachineID, ServiceID: &svc.ID}
-	if _, err := s.st.IngestEvent(r.Context(), appendEnv, authz, now); err != nil {
+	if _, err := s.db(r).IngestEvent(r.Context(), appendEnv, authz, now); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
@@ -70,7 +70,7 @@ func (s *Server) handleSummarizeLogs(w http.ResponseWriter, r *http.Request) {
 			ServiceKey:    svc.ServiceKey,
 			Payload:       mustJSON(event.LogPayload{Markdown: md, Severity: "info", Source: "summarize"}),
 		}
-		if _, err := s.st.IngestEvent(r.Context(), pinEnv, authz, now); err != nil {
+		if _, err := s.db(r).IngestEvent(r.Context(), pinEnv, authz, now); err != nil {
 			api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 			return
 		}

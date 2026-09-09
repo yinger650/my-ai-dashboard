@@ -205,7 +205,7 @@ type Artifact struct {
 	DeletedAt     *string `json:"deleted_at,omitempty"`
 }
 
-// Session mirrors admin_sessions.
+// Session mirrors admin_sessions (personal) or user_sessions (Feishu edition).
 type Session struct {
 	ID            string
 	TokenHash     string
@@ -215,4 +215,9 @@ type Session struct {
 	LastSeenAt    string
 	IP            *string
 	UserAgent     *string
+	// Feishu edition only.
+	UserID        string
+	WorkspaceID   string
+	WorkspaceSlug string
+	DisplayName   string
 }

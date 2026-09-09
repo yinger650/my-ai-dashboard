@@ -16,7 +16,7 @@ import (
 func (s *Server) handleServiceDetail(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	svc, err := s.st.GetServiceByID(r.Context(), id)
+	svc, err := s.db(r).GetServiceByID(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -26,15 +26,15 @@ func (s *Server) handleServiceDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.closeStaleRunsBestEffort(r.Context())
-	if fresh, ferr := s.st.GetServiceByID(r.Context(), id); ferr == nil {
+	if fresh, ferr := s.db(r).GetServiceByID(r.Context(), id); ferr == nil {
 		svc = fresh
 	}
-	statuses, _ := s.st.ListStatuses(r.Context(), id)
+	statuses, _ := s.db(r).ListStatuses(r.Context(), id)
 	var pinned *store.PinnedLog
-	if p, perr := s.st.GetPinnedLog(r.Context(), id); perr == nil {
+	if p, perr := s.db(r).GetPinnedLog(r.Context(), id); perr == nil {
 		pinned = p
 	}
-	machine, _ := s.st.GetMachineByID(r.Context(), svc.MachineID)
+	machine, _ := s.db(r).GetMachineByID(r.Context(), svc.MachineID)
 	api.WriteData(w, rid, map[string]any{
 		"service":  svc,
 		"machine":  machine,
@@ -46,7 +46,7 @@ func (s *Server) handleServiceDetail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleServiceStatuses(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	statuses, err := s.st.ListStatuses(r.Context(), id)
+	statuses, err := s.db(r).ListStatuses(r.Context(), id)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -58,7 +58,7 @@ func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
 	cursor := r.URL.Query().Get("cursor")
-	logs, err := s.st.ListServiceLogs(r.Context(), id, cursor, 100)
+	logs, err := s.db(r).ListServiceLogs(r.Context(), id, cursor, 100)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -75,7 +75,7 @@ func (s *Server) handleServiceRuns(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
 	s.closeStaleRunsBestEffort(r.Context())
-	runs, err := s.st.ListRuns(r.Context(), id, 50)
+	runs, err := s.db(r).ListRuns(r.Context(), id, 50)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -102,12 +102,12 @@ func (s *Server) handleCreateService(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusUnprocessableEntity, api.CodeValidationFailed, "invalid service fields", rid)
 		return
 	}
-	if _, err := s.st.GetMachineByID(r.Context(), req.MachineID); errors.Is(err, store.ErrNotFound) {
+	if _, err := s.db(r).GetMachineByID(r.Context(), req.MachineID); errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "machine not found", rid)
 		return
 	}
 	svc := &store.Service{MachineID: req.MachineID, ServiceKey: req.ServiceKey, Name: req.Name, Type: req.Type, Description: req.Description, Enabled: true}
-	if err := s.st.CreateService(r.Context(), svc); err != nil {
+	if err := s.db(r).CreateService(r.Context(), svc); err != nil {
 		api.WriteError(w, http.StatusUnprocessableEntity, api.CodeValidationFailed, "could not create service (duplicate key?)", rid)
 		return
 	}
@@ -124,7 +124,7 @@ type updateServiceRequest struct {
 func (s *Server) handleUpdateService(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	svc, err := s.st.GetServiceByID(r.Context(), id)
+	svc, err := s.db(r).GetServiceByID(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -151,22 +151,22 @@ func (s *Server) handleUpdateService(w http.ResponseWriter, r *http.Request) {
 	if req.SortOrder != nil {
 		sortOrder = *req.SortOrder
 	}
-	if err := s.st.UpdateServiceFields(r.Context(), id, name, desc, enabled, sortOrder, svc.MetadataJSON); err != nil {
+	if err := s.db(r).UpdateServiceFields(r.Context(), id, name, desc, enabled, sortOrder, svc.MetadataJSON); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	updated, _ := s.st.GetServiceByID(r.Context(), id)
+	updated, _ := s.db(r).GetServiceByID(r.Context(), id)
 	api.WriteData(w, rid, updated, nil)
 }
 
 func (s *Server) handleDeleteService(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	if _, err := s.st.GetServiceByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+	if _, err := s.db(r).GetServiceByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
 	}
-	if err := s.st.SoftDeleteService(r.Context(), id); err != nil {
+	if err := s.db(r).SoftDeleteService(r.Context(), id); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
@@ -176,14 +176,14 @@ func (s *Server) handleDeleteService(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeletePinnedLog(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	if _, err := s.st.GetServiceByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+	if _, err := s.db(r).GetServiceByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
 	} else if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	if err := s.st.DeletePinnedLog(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+	if err := s.db(r).DeletePinnedLog(r.Context(), id); errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
 	} else if err != nil {

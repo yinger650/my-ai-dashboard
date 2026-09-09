@@ -15,7 +15,13 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if err := s.st.Ping(ctx); err != nil {
+	var err error
+	if s.hub != nil {
+		err = s.hub.Ping(ctx)
+	} else if s.st != nil {
+		err = s.st.Ping(ctx)
+	}
+	if err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("not_ready"))
 		return

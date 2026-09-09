@@ -21,7 +21,7 @@ var machineKeyRe = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
 func (s *Server) handleMachineDetail(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	m, err := s.st.GetMachineByID(r.Context(), id)
+	m, err := s.db(r).GetMachineByID(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) || (m != nil && m.DeletedAt != nil) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -31,13 +31,13 @@ func (s *Server) handleMachineDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.closeStaleRunsBestEffort(r.Context())
-	latest, _ := s.st.LatestMetric(r.Context(), id)
+	latest, _ := s.db(r).LatestMetric(r.Context(), id)
 	health, resSev := machineHealth(m, latest, time.Now().UTC())
-	statuses, _ := s.st.ListStatusesByMachine(r.Context(), id)
+	statuses, _ := s.db(r).ListStatusesByMachine(r.Context(), id)
 	if statuses == nil {
 		statuses = []store.CurrentStatus{}
 	}
-	activeRuns, _ := s.st.ListActiveRunsByMachine(r.Context(), id)
+	activeRuns, _ := s.db(r).ListActiveRunsByMachine(r.Context(), id)
 	if activeRuns == nil {
 		activeRuns = []store.ActiveRun{}
 	}
@@ -66,7 +66,7 @@ func (s *Server) handleMachineMetrics(w http.ResponseWriter, r *http.Request) {
 		dur = time.Hour
 	}
 	since := shared.FormatTime(time.Now().UTC().Add(-dur))
-	samples, err := s.st.MetricsSince(r.Context(), id, since, 1000)
+	samples, err := s.db(r).MetricsSince(r.Context(), id, since, 1000)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -77,7 +77,7 @@ func (s *Server) handleMachineMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMachineServices(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	svcs, err := s.st.ListServicesByMachine(r.Context(), id)
+	svcs, err := s.db(r).ListServicesByMachine(r.Context(), id)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -88,7 +88,7 @@ func (s *Server) handleMachineServices(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMachinePorts(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	m, err := s.st.GetMachineByID(r.Context(), id)
+	m, err := s.db(r).GetMachineByID(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) || (m != nil && m.DeletedAt != nil) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -97,7 +97,7 @@ func (s *Server) handleMachinePorts(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	raw, occurred, err := s.st.LatestPortSnapshot(r.Context(), id)
+	raw, occurred, err := s.db(r).LatestPortSnapshot(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		api.WriteData(w, rid, map[string]any{"ports": []any{}, "occurred_at": nil}, nil)
 		return
@@ -127,7 +127,7 @@ func (s *Server) handleMachineLogs(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 	exclude := r.URL.Query()["exclude"]
-	logs, err := s.st.ListMachineLogsExcluding(r.Context(), id, cursor, limit, exclude)
+	logs, err := s.db(r).ListMachineLogsExcluding(r.Context(), id, cursor, limit, exclude)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -137,7 +137,7 @@ func (s *Server) handleMachineLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	var pinned []store.PinnedLog
 	if cursor == "" {
-		pinned, err = s.st.ListPinnedLogsByMachine(r.Context(), id)
+		pinned, err = s.db(r).ListPinnedLogsByMachine(r.Context(), id)
 		if err != nil {
 			api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 			return
@@ -159,7 +159,7 @@ func (s *Server) handleMachineLogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListMachinesAdmin(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
-	machines, err := s.st.ListMachines(r.Context(), true)
+	machines, err := s.db(r).ListMachines(r.Context(), true)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -199,7 +199,7 @@ func (s *Server) handleCreateMachine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m := &store.Machine{MachineKey: req.MachineKey, Name: req.Name, Kind: req.Kind, Description: req.Description, Enabled: true, AutoCreateServices: true}
-	if err := s.st.CreateMachine(r.Context(), m); err != nil {
+	if err := s.db(r).CreateMachine(r.Context(), m); err != nil {
 		api.WriteError(w, http.StatusUnprocessableEntity, api.CodeValidationFailed, "could not create machine (duplicate key?)", rid)
 		return
 	}
@@ -212,7 +212,7 @@ func (s *Server) handleCreateMachine(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tok := &store.Token{Name: req.Name + " machine token", TokenPrefix: prefix, TokenHash: hash, Scope: auth.ScopeMachine, MachineID: &m.ID, Enabled: true}
-		if err := s.st.CreateToken(r.Context(), tok); err != nil {
+		if err := s.db(r).CreateToken(r.Context(), tok); err != nil {
 			api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 			return
 		}
@@ -231,7 +231,7 @@ type updateMachineRequest struct {
 func (s *Server) handleUpdateMachine(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	m, err := s.st.GetMachineByID(r.Context(), id)
+	m, err := s.db(r).GetMachineByID(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) || (m != nil && m.DeletedAt != nil) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -262,22 +262,22 @@ func (s *Server) handleUpdateMachine(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	if err := s.st.UpdateMachineFields(r.Context(), id, name, kind, desc, enabled, m.MetadataJSON); err != nil {
+	if err := s.db(r).UpdateMachineFields(r.Context(), id, name, kind, desc, enabled, m.MetadataJSON); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	updated, _ := s.st.GetMachineByID(r.Context(), id)
+	updated, _ := s.db(r).GetMachineByID(r.Context(), id)
 	api.WriteData(w, rid, updated, nil)
 }
 
 func (s *Server) handleDeleteMachine(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	if _, err := s.st.GetMachineByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+	if _, err := s.db(r).GetMachineByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
 	}
-	if err := s.st.SoftDeleteMachine(r.Context(), id); err != nil {
+	if err := s.db(r).SoftDeleteMachine(r.Context(), id); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}

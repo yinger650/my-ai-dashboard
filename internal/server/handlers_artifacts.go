@@ -42,11 +42,11 @@ func (s *Server) artifactQuota() int64 {
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	if _, err := s.st.GetServiceByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+	if _, err := s.db(r).GetServiceByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
 	}
-	list, err := s.st.ListArtifactsByService(r.Context(), id, 50)
+	list, err := s.db(r).ListArtifactsByService(r.Context(), id, 50)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -54,7 +54,7 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []*store.Artifact{}
 	}
-	used, _ := s.st.ArtifactBytesUsed(r.Context())
+	used, _ := s.db(r).ArtifactBytesUsed(r.Context())
 	api.WriteData(w, rid, map[string]any{
 		"artifacts":   list,
 		"bytes_used":  used,
@@ -65,7 +65,7 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUploadArtifact(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
-	svc, err := s.st.GetServiceByID(r.Context(), chi.URLParam(r, "id"))
+	svc, err := s.db(r).GetServiceByID(r.Context(), chi.URLParam(r, "id"))
 	if errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -117,7 +117,7 @@ func (s *Server) handleIngestArtifact(w http.ResponseWriter, r *http.Request) {
 	if ingestAuth.ServiceID != nil {
 		serviceID = ingestAuth.ServiceID
 	} else if serviceKey != "" {
-		svc, err := s.st.GetServiceByKey(r.Context(), ingestAuth.MachineID, serviceKey)
+		svc, err := s.db(r).GetServiceByKey(r.Context(), ingestAuth.MachineID, serviceKey)
 		if errors.Is(err, store.ErrNotFound) {
 			api.WriteError(w, http.StatusUnprocessableEntity, api.CodeValidationFailed, "service not found", rid)
 			return
@@ -164,7 +164,7 @@ func (s *Server) saveUploadedArtifact(r *http.Request, machineID string, service
 		return nil, api.CodePayloadTooLarge, "file exceeds max upload size", nil
 	}
 
-	used, err := s.st.ArtifactBytesUsed(r.Context())
+	used, err := s.db(r).ArtifactBytesUsed(r.Context())
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -191,12 +191,13 @@ func (s *Server) saveUploadedArtifact(r *http.Request, machineID string, service
 		return nil, api.CodeUnsupportedMedia, "unsupported media type", nil
 	}
 
-	tmp, err := os.CreateTemp(s.cfg.ArtifactDir, "upload-*")
+	dir := s.artifactDir(r)
+	tmp, err := os.CreateTemp(dir, "upload-*")
 	if err != nil {
-		if mkErr := os.MkdirAll(s.cfg.ArtifactDir, 0o750); mkErr != nil {
+		if mkErr := os.MkdirAll(dir, 0o750); mkErr != nil {
 			return nil, "", "", mkErr
 		}
-		tmp, err = os.CreateTemp(s.cfg.ArtifactDir, "upload-*")
+		tmp, err = os.CreateTemp(dir, "upload-*")
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -218,7 +219,7 @@ func (s *Server) saveUploadedArtifact(r *http.Request, machineID string, service
 	id := shared.NewID()
 	ext := filepath.Ext(original)
 	stored := id + ext
-	dest := filepath.Join(s.cfg.ArtifactDir, stored)
+	dest := filepath.Join(s.artifactDir(r), stored)
 
 	sum := hex.EncodeToString(h.Sum(nil))
 	now := shared.FormatTime(shared.NowUTC())
@@ -239,7 +240,7 @@ func (s *Server) saveUploadedArtifact(r *http.Request, machineID string, service
 			Payload:       payload,
 		}
 		authz := store.IngestAuth{MachineID: machineID, ServiceID: serviceID}
-		res, err := s.st.IngestEvent(r.Context(), env, authz, now)
+		res, err := s.db(r).IngestEvent(r.Context(), env, authz, now)
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -260,11 +261,11 @@ func (s *Server) saveUploadedArtifact(r *http.Request, machineID string, service
 		SHA256:        sum,
 		CreatedAt:     now,
 	}
-	if err := s.st.InsertArtifact(r.Context(), art); err != nil {
+	if err := s.db(r).InsertArtifact(r.Context(), art); err != nil {
 		return nil, "", "", err
 	}
 	if err := os.Rename(tmp.Name(), dest); err != nil {
-		_ = s.st.SoftDeleteArtifact(r.Context(), id)
+		_ = s.db(r).SoftDeleteArtifact(r.Context(), id)
 		return nil, "", "", err
 	}
 	return art, "", "", nil
@@ -272,7 +273,7 @@ func (s *Server) saveUploadedArtifact(r *http.Request, machineID string, service
 
 func (s *Server) handleArtifactContent(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
-	art, err := s.st.GetArtifact(r.Context(), chi.URLParam(r, "id"))
+	art, err := s.db(r).GetArtifact(r.Context(), chi.URLParam(r, "id"))
 	if errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -281,7 +282,7 @@ func (s *Server) handleArtifactContent(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	path := filepath.Join(s.cfg.ArtifactDir, art.StoredName)
+	path := filepath.Join(s.artifactDir(r), art.StoredName)
 	inline := r.URL.Query().Get("inline") == "1" && isPreviewable(art.MIMEType)
 	disp := "attachment"
 	if inline {
@@ -296,7 +297,7 @@ func (s *Server) handleArtifactContent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteArtifact(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	art, err := s.st.GetArtifact(r.Context(), id)
+	art, err := s.db(r).GetArtifact(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -305,11 +306,11 @@ func (s *Server) handleDeleteArtifact(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	if err := s.st.SoftDeleteArtifact(r.Context(), id); err != nil {
+	if err := s.db(r).SoftDeleteArtifact(r.Context(), id); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
-	_ = os.Remove(filepath.Join(s.cfg.ArtifactDir, art.StoredName))
+	_ = os.Remove(filepath.Join(s.artifactDir(r), art.StoredName))
 	api.WriteData(w, rid, map[string]any{"deleted": true}, nil)
 }
 

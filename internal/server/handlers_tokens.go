@@ -14,7 +14,7 @@ import (
 
 func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
-	tokens, err := s.st.ListTokens(r.Context())
+	tokens, err := s.db(r).ListTokens(r.Context())
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -39,14 +39,14 @@ func (s *Server) createTokenFromRequest(r *http.Request, req *createTokenRequest
 		if req.MachineID == nil {
 			return nil, "", errors.New("machine_id required"), http.StatusUnprocessableEntity
 		}
-		if _, err := s.st.GetMachineByID(r.Context(), *req.MachineID); err != nil {
+		if _, err := s.db(r).GetMachineByID(r.Context(), *req.MachineID); err != nil {
 			return nil, "", errors.New("machine not found"), http.StatusNotFound
 		}
 	case auth.ScopeService:
 		if req.ServiceID == nil {
 			return nil, "", errors.New("service_id required"), http.StatusUnprocessableEntity
 		}
-		if _, err := s.st.GetServiceByID(r.Context(), *req.ServiceID); err != nil {
+		if _, err := s.db(r).GetServiceByID(r.Context(), *req.ServiceID); err != nil {
 			return nil, "", errors.New("service not found"), http.StatusNotFound
 		}
 	case auth.ScopeViewer:
@@ -70,7 +70,7 @@ func (s *Server) createTokenFromRequest(r *http.Request, req *createTokenRequest
 		RequestsPerMinute: req.RequestsPerMinute, BytesPerDay: req.BytesPerDay,
 		AllowArtifactDownload: req.AllowArtifactDownload, Enabled: true,
 	}
-	if err := s.st.CreateToken(r.Context(), tok); err != nil {
+	if err := s.db(r).CreateToken(r.Context(), tok); err != nil {
 		return nil, "", err, http.StatusInternalServerError
 	}
 	return tok, full, nil, 0
@@ -106,7 +106,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	old, err := s.st.GetTokenByID(r.Context(), id)
+	old, err := s.db(r).GetTokenByID(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
@@ -125,7 +125,7 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, status, api.CodeInternalError, cerr.Error(), rid)
 		return
 	}
-	if err := s.st.RevokeToken(r.Context(), old.ID); err != nil {
+	if err := s.db(r).RevokeToken(r.Context(), old.ID); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}
@@ -137,11 +137,11 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	id := chi.URLParam(r, "id")
-	if _, err := s.st.GetTokenByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
+	if _, err := s.db(r).GetTokenByID(r.Context(), id); errors.Is(err, store.ErrNotFound) {
 		api.WriteError(w, http.StatusNotFound, api.CodeNotFound, "not found", rid)
 		return
 	}
-	if err := s.st.RevokeToken(r.Context(), id); err != nil {
+	if err := s.db(r).RevokeToken(r.Context(), id); err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
 	}

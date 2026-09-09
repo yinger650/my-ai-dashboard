@@ -18,7 +18,11 @@ import (
 // closeStaleRunsBestEffort persists failed/timed_out/cancelled for idle
 // runs so board cards drop them from 进行中 without a manual cleanup.
 func (s *Server) closeStaleRunsBestEffort(ctx context.Context) {
-	if _, err := s.st.CloseStaleRuns(ctx, store.DefaultStaleRunIdle); err != nil && s.log != nil {
+	st := s.dbFrom(ctx)
+	if st == nil {
+		return
+	}
+	if _, err := st.CloseStaleRuns(ctx, store.DefaultStaleRunIdle); err != nil && s.log != nil {
 		s.log.Warn("close stale runs failed", "err", err)
 	}
 }
@@ -35,7 +39,7 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, []map[string]str
 	ctx := r.Context()
 	s.closeStaleRunsBestEffort(ctx)
 	now := time.Now().UTC()
-	machines, err := s.st.ListMachines(ctx, false)
+	machines, err := s.db(r).ListMachines(ctx, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -43,14 +47,14 @@ func (s *Server) buildBoard(r *http.Request) ([]map[string]any, []map[string]str
 	names := map[string]string{}
 	out := make([]map[string]any, 0, len(machines))
 	for _, m := range machines {
-		latest, _ := s.st.LatestMetric(ctx, m.ID)
+		latest, _ := s.db(r).LatestMetric(ctx, m.ID)
 		health, resSev := machineHealth(m, latest, now)
-		counts, _ := s.st.ServiceSeverityCounts(ctx, m.ID)
-		svcs, _ := s.st.ListServicesByMachine(ctx, m.ID)
-		statuses, _ := s.st.ListStatusesByMachine(ctx, m.ID)
-		pinned, _ := s.st.ListPinnedLogsByMachine(ctx, m.ID)
-		recent, _ := s.st.ListMachineLogsExcluding(ctx, m.ID, "", 20, []string{"cron"})
-		activeRuns, _ := s.st.ListActiveRunsByMachine(ctx, m.ID)
+		counts, _ := s.db(r).ServiceSeverityCounts(ctx, m.ID)
+		svcs, _ := s.db(r).ListServicesByMachine(ctx, m.ID)
+		statuses, _ := s.db(r).ListStatusesByMachine(ctx, m.ID)
+		pinned, _ := s.db(r).ListPinnedLogsByMachine(ctx, m.ID)
+		recent, _ := s.db(r).ListMachineLogsExcluding(ctx, m.ID, "", 20, []string{"cron"})
+		activeRuns, _ := s.db(r).ListActiveRunsByMachine(ctx, m.ID)
 
 		if svcs == nil {
 			svcs = []*store.Service{}
@@ -147,7 +151,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	since := shared.FormatTime(time.Now().UTC().Add(-time.Hour))
-	abnormal, _ := s.st.AbnormalCountSince(r.Context(), since)
+	abnormal, _ := s.db(r).AbnormalCountSince(r.Context(), since)
 	title := s.settingString(r, "board_title", "AgentBoard Personal")
 	poll := s.settingInt(r, "poll_interval_seconds", 15)
 	layout := s.settingJSON(r, "board_layout")
@@ -168,7 +172,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBoardTxt(w http.ResponseWriter, r *http.Request) {
 	s.closeStaleRunsBestEffort(r.Context())
 	now := time.Now().UTC()
-	machines, err := s.st.ListMachines(r.Context(), false)
+	machines, err := s.db(r).ListMachines(r.Context(), false)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -184,7 +188,7 @@ func (s *Server) handleBoardTxt(w http.ResponseWriter, r *http.Request) {
 		if filter != "" && m.MachineKey != filter {
 			continue
 		}
-		latest, _ := s.st.LatestMetric(r.Context(), m.ID)
+		latest, _ := s.db(r).LatestMetric(r.Context(), m.ID)
 		health, _ := machineHealth(m, latest, now)
 		label := strings.ToUpper(health)
 		if compact {
@@ -192,9 +196,9 @@ func (s *Server) handleBoardTxt(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		fmt.Fprintf(&b, "[%s] %-20s %s\n", label, m.Name, metricSummary(latest, m, now))
-		counts, _ := s.st.ServiceSeverityCounts(r.Context(), m.ID)
+		counts, _ := s.db(r).ServiceSeverityCounts(r.Context(), m.ID)
 		fmt.Fprintf(&b, "  services: %d normal, %d warning, %d error\n", counts["normal"], counts["warning"], counts["error"])
-		activeRuns, _ := s.st.ListActiveRunsByMachine(r.Context(), m.ID)
+		activeRuns, _ := s.db(r).ListActiveRunsByMachine(r.Context(), m.ID)
 		if len(activeRuns) > 0 {
 			parts := make([]string, 0, len(activeRuns))
 			for _, ar := range activeRuns {
@@ -206,15 +210,15 @@ func (s *Server) handleBoardTxt(w http.ResponseWriter, r *http.Request) {
 			}
 			fmt.Fprintf(&b, "  running %d: %s\n", len(activeRuns), strings.Join(parts, "  |  "))
 		}
-		statuses, _ := s.st.ListStatusesByMachine(r.Context(), m.ID)
+		statuses, _ := s.db(r).ListStatusesByMachine(r.Context(), m.ID)
 		if parts := textBoardStatusParts(statuses); len(parts) > 0 {
 			fmt.Fprintf(&b, "  status: %s\n", strings.Join(parts, "  "))
 		}
-		pinned, _ := s.st.ListPinnedLogsByMachine(r.Context(), m.ID)
+		pinned, _ := s.db(r).ListPinnedLogsByMachine(r.Context(), m.ID)
 		for _, p := range pinned {
 			fmt.Fprintf(&b, "  PIN %s %s\n", strings.ToUpper(p.Severity), oneLine(p.Markdown))
 		}
-		recent, _ := s.st.ListMachineLogs(r.Context(), m.ID, "", 5)
+		recent, _ := s.db(r).ListMachineLogs(r.Context(), m.ID, "", 5)
 		for _, l := range recent {
 			fmt.Fprintf(&b, "  %s %s\n", strings.ToUpper(l.Severity), oneLine(l.Markdown))
 		}

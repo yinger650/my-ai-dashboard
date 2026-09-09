@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Copy, Database, KeyRound, Server, Shield, Terminal } from "lucide-react";
-import { apiDelete, apiGet, apiPatch, apiPost } from "../api";
+import { apiDelete, apiGet, apiPatch, apiPost, fetchSession } from "../api";
 import type { Board, Machine, TokenInfo } from "../types";
 import { fmtBytes, localTime } from "../format";
 import { Button } from "../components/ui/button";
@@ -26,6 +26,9 @@ interface AdminSettings {
   public_url?: string;
   board_txt_url?: string;
   ingest_url?: string;
+  ingest_origin?: string;
+  workspace_slug?: string;
+  edition?: string;
   board_layout?: unknown;
   card_pin_keys?: string[];
   [k: string]: unknown;
@@ -43,7 +46,13 @@ export function SettingsPage() {
   const machines = useQuery({ queryKey: ["admin-machines"], queryFn: () => apiGet<Machine[]>("/api/v1/admin/machines") });
   const tokens = useQuery({ queryKey: ["admin-tokens"], queryFn: () => apiGet<TokenInfo[]>("/api/v1/admin/tokens") });
   const settings = useQuery({ queryKey: ["admin-settings"], queryFn: () => apiGet<AdminSettings>("/api/v1/admin/settings") });
-  const totp = useQuery({ queryKey: ["admin-totp"], queryFn: () => apiGet<{ enabled: boolean }>("/api/v1/admin/totp") });
+  const session = useQuery({ queryKey: ["session"], queryFn: fetchSession });
+  const feishu = session.data?.edition === "feishu";
+  const totp = useQuery({
+    queryKey: ["admin-totp"],
+    queryFn: () => apiGet<{ enabled: boolean }>("/api/v1/admin/totp"),
+    enabled: session.isSuccess && session.data?.edition !== "feishu",
+  });
   const board = useQuery({ queryKey: ["board"], queryFn: () => apiGet<Board>("/api/v1/board") });
 
   const [mKey, setMKey] = useState("");
@@ -191,6 +200,8 @@ export function SettingsPage() {
   const publicUrl = String(settings.data?.public_url ?? "");
   const boardTxt = String(settings.data?.board_txt_url ?? `${publicUrl}/api/v1/board.txt`);
   const ingestUrl = String(settings.data?.ingest_url ?? `${publicUrl}/ingest/v1/events`);
+  const ingestOrigin = String(settings.data?.ingest_origin ?? publicUrl);
+  const workspaceSlug = String(settings.data?.workspace_slug ?? session.data?.workspace_slug ?? "");
 
   return (
     <div className="flex flex-col gap-6">
@@ -342,9 +353,25 @@ export function SettingsPage() {
             onCopy={() => copy(ingestUrl, "ingest")}
             copied={copied === "ingest"}
           />
+          {feishu && (
+            <>
+              <CopyRow
+                label="上报 origin（AGENTBOARD_URL）"
+                value={ingestOrigin}
+                onCopy={() => copy(ingestOrigin, "origin")}
+                copied={copied === "origin"}
+              />
+              <p className="text-xs text-slate-500">
+                网页入口永远是根路径 {publicUrl || "/"}。Agent 上报请把{" "}
+                <code className="font-mono">AGENTBOARD_URL</code> 设为上面的 origin（含 8 位 slug
+                {workspaceSlug ? ` ${workspaceSlug}` : ""}），并继续使用 Machine Token。
+              </p>
+            </>
+          )}
         </CardContent>
       </Card>
 
+      {!feishu && (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -409,6 +436,7 @@ export function SettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       <Card>
         <CardHeader>

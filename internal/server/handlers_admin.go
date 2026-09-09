@@ -53,7 +53,11 @@ func (s *Server) defaultSettings() map[string]any {
 }
 
 func (s *Server) settingString(r *http.Request, key, def string) string {
-	v, err := s.st.GetSetting(r.Context(), key)
+	st := s.db(r)
+	if st == nil {
+		return def
+	}
+	v, err := st.GetSetting(r.Context(), key)
 	if err != nil {
 		return def
 	}
@@ -65,7 +69,11 @@ func (s *Server) settingString(r *http.Request, key, def string) string {
 }
 
 func (s *Server) settingInt(r *http.Request, key string, def int) int {
-	v, err := s.st.GetSetting(r.Context(), key)
+	st := s.db(r)
+	if st == nil {
+		return def
+	}
+	v, err := st.GetSetting(r.Context(), key)
 	if err != nil {
 		return def
 	}
@@ -77,7 +85,11 @@ func (s *Server) settingInt(r *http.Request, key string, def int) int {
 }
 
 func (s *Server) settingJSON(r *http.Request, key string) any {
-	v, err := s.st.GetSetting(r.Context(), key)
+	st := s.db(r)
+	if st == nil {
+		return nil
+	}
+	v, err := st.GetSetting(r.Context(), key)
 	if err != nil {
 		return nil
 	}
@@ -90,7 +102,11 @@ func (s *Server) settingJSON(r *http.Request, key string) any {
 
 func (s *Server) mergedSettings(ctx context.Context) (map[string]any, error) {
 	out := s.defaultSettings()
-	stored, err := s.st.AllSettings(ctx)
+	st := s.dbFrom(ctx)
+	if st == nil {
+		return out, nil
+	}
+	stored, err := st.AllSettings(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -111,9 +127,21 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	public := strings.TrimRight(s.cfg.PublicURL, "/")
+	base := s.ingestBase(r)
 	settings["public_url"] = public
-	settings["board_txt_url"] = public + "/api/v1/board.txt"
-	settings["ingest_url"] = public + "/ingest/v1/events"
+	settings["edition"] = s.edition
+	if t := s.tenant(r); t != nil && t.Slug != "" {
+		settings["workspace_slug"] = t.Slug
+	}
+	if base != "" {
+		settings["board_txt_url"] = public + base + "/api/v1/board.txt"
+		settings["ingest_url"] = public + base + "/ingest/v1/events"
+		settings["ingest_origin"] = public + base
+	} else {
+		settings["board_txt_url"] = public + "/api/v1/board.txt"
+		settings["ingest_url"] = public + "/ingest/v1/events"
+		settings["ingest_origin"] = public
+	}
 	api.WriteData(w, rid, settings, nil)
 }
 
@@ -137,7 +165,7 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 			api.WriteError(w, http.StatusUnprocessableEntity, api.CodeValidationFailed, "unknown setting: "+k, rid)
 			return
 		}
-		if err := s.st.SetSetting(r.Context(), k, string(v)); err != nil {
+		if err := s.db(r).SetSetting(r.Context(), k, string(v)); err != nil {
 			api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 			return
 		}
@@ -150,7 +178,7 @@ func (s *Server) handleAccessLogs(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
 	abnormal := r.URL.Query().Get("abnormal") == "1"
 	cursor := r.URL.Query().Get("cursor")
-	logs, err := s.st.ListAccessLogs(r.Context(), abnormal, cursor, 50)
+	logs, err := s.db(r).ListAccessLogs(r.Context(), abnormal, cursor, 50)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -165,7 +193,7 @@ func (s *Server) handleAccessLogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMaintenanceRun(w http.ResponseWriter, r *http.Request) {
 	rid := requestID(r.Context())
-	res, err := s.st.ApplyRetention(r.Context(), s.retentionPolicy(r.Context()))
+	res, err := s.db(r).ApplyRetention(r.Context(), s.retentionPolicy(r.Context()))
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, api.CodeInternalError, "internal error", rid)
 		return
@@ -218,7 +246,11 @@ func (s *Server) retentionPolicy(ctx context.Context) store.RetentionPolicy {
 }
 
 func (s *Server) storedInt(ctx context.Context, key string) int {
-	v, err := s.st.GetSetting(ctx, key)
+	st := s.dbFrom(ctx)
+	if st == nil {
+		return 0
+	}
+	v, err := st.GetSetting(ctx, key)
 	if err != nil {
 		return 0
 	}
