@@ -30,7 +30,7 @@ describe("describeServiceFunction", () => {
     ).toMatch(/反向代理/);
     expect(
       describeServiceFunction({
-        service_key: "site-board-yinger650-com",
+        service_key: "site-board-example-com",
         name: "board",
         type: "virtual",
         description: "",
