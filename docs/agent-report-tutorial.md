@@ -1,6 +1,6 @@
 # 小白教程：给编码 Agent 装 AgentBoard 上报
 
-这篇只教一件事：让 Cursor / Codex / Claude Code / OpenClaw / Hermes / Pi **把自己正在做什么报到看板**。打开 https://board.yinger650.com 就能看见任务开始、完成、失败，以及中途被掐掉。
+这篇只教一件事：让 Cursor / Codex / Claude Code / OpenClaw / Hermes / Pi **把自己正在做什么报到看板**。打开你的看板（`AGENTBOARD_URL` / `ABP_PUBLIC_URL`）就能看见任务开始、完成、失败，以及中途被掐掉。
 
 机器 CPU、磁盘、网站探测请看 [配置 board-client 上报日志](./client-log-tutorial.md)。那是另一条链路。
 
@@ -31,10 +31,12 @@
 写入**这个仓库**根目录 `.env`（已 gitignore，不要提交）：
 
 ```bash
-AGENTBOARD_URL=https://board.yinger650.com
+AGENTBOARD_URL=https://board.example.com
 AGENTBOARD_TOKEN=abp_m_你的token
 AGENTBOARD_PROVIDER=cursor
 ```
+
+把 `https://board.example.com` 换成你的看板 `ABP_PUBLIC_URL`，不要沿用示例域名。
 
 飞书 edition 的看板网页是站点根路径；`AGENTBOARD_URL` 必须带上设置页里的 8 位 slug，例如 `https://<飞书看板域名>/xxxxxxxx`。详见 [Feishu edition](./feishu-edition.md)。
 

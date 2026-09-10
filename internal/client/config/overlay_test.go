@@ -13,7 +13,7 @@ func TestOverlayEnablesDiscoverWithoutDefaultsPollution(t *testing.T) {
 	src := `# keep this comment
 version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_keep"
 machine:
   key: "home-server"
@@ -27,7 +27,7 @@ collectors:
     targets:
       - service_key: site-board
         name: AgentBoard
-        url: "https://board.yinger650.com/health/live"
+        url: "https://board.example.com/health/live"
 `
 	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestOverlayKeepsTokenWhenEmpty(t *testing.T) {
 	p := filepath.Join(dir, "client.yaml")
 	src := `version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_original"
 machine:
   key: "home-server"
@@ -100,7 +100,7 @@ machine:
 	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyEdit(p, Edit{URL: "https://board.yinger650.com", Token: ""}); err != nil {
+	if err := ApplyEdit(p, Edit{URL: "https://board.example.com", Token: ""}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(p)
@@ -113,7 +113,7 @@ func TestOverlayNewFileSkeleton(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "missing.yaml")
 	err := ApplyEdit(p, Edit{
-		URL:        "https://board.yinger650.com",
+		URL:        "https://board.example.com",
 		MachineKey: "home-server",
 		Features: map[string]bool{
 			"cpu":    true,

@@ -14,7 +14,7 @@ import (
 	"agentboard/internal/event"
 )
 
-const httpProbeUserAgent = "AgentBoard-Client/1.2 (+https://board.yinger650.com)"
+const httpProbeUserAgent = "AgentBoard-Client/1.2 (+https://github.com/yinger650/my-ai-dashboard)"
 const httpMaxBody = 64 * 1024
 
 // HTTPTarget is one website (or health URL) to probe.

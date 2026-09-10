@@ -1,10 +1,11 @@
 version: 1
 
-# 阿里云远程客户端：上报本机指标，并探测若干网站是否可访问。
+# 远程客户端：上报本机指标，并探测若干网站是否可访问。
 # 安装到 /etc/agentboard/client.yaml ，Token 只放环境变量，不要写入本文件。
+# 把 board.example.com 换成你的看板 ABP_PUBLIC_URL（远程机器不能用 127.0.0.1）。
 
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token_env: "ABP_MACHINE_TOKEN"
   timeout: 20s
   tls_insecure_skip_verify: false
@@ -28,7 +29,7 @@ intervals:
 
 update:
   enabled: true
-  url: "https://board.yinger650.com/client-updates"
+  url: "https://board.example.com/client-updates"
   interval: 1h
 
 local_ingest:
@@ -85,10 +86,10 @@ collectors:
     targets:
       - service_key: site-board
         name: AgentBoard
-        url: "https://board.yinger650.com/health/live"
+        url: "https://board.example.com/health/live"
         method: GET
         expect_status: [200]
-      # yinger650.com / www 不是必须探测，默认不配。需要时再追加 target。
+      # 其它站点不是必须探测，默认不配。需要时再追加 target。
       # 继续追加站点：
       # - service_key: site-example
       #   name: 示例站

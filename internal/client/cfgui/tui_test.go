@@ -24,7 +24,7 @@ func TestSaveWritesYAML(t *testing.T) {
 	p := filepath.Join(dir, "client.yaml")
 	src := `version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_old"
 machine:
   key: "home-server"
@@ -37,7 +37,7 @@ collectors:
 		t.Fatal(err)
 	}
 	ed := config.Edit{
-		URL:          "https://board.yinger650.com",
+		URL:          "https://board.example.com",
 		MachineKey:   "home-server",
 		Token:        "abp_m_ui_token_value",
 		Features:     map[string]bool{"cpu": true, "memory": true},
@@ -81,7 +81,7 @@ func TestSaveKeepsTokenWhenEmpty(t *testing.T) {
 	p := filepath.Join(dir, "client.yaml")
 	if err := os.WriteFile(p, []byte(`version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_keep_me"
 machine:
   key: "home-server"
@@ -111,7 +111,7 @@ func TestTUIToggleAndSave(t *testing.T) {
 	p := filepath.Join(dir, "client.yaml")
 	if err := os.WriteFile(p, []byte(`version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_x"
 machine:
   key: "home-server"
@@ -147,7 +147,7 @@ func TestWebSaveTogglesFeature(t *testing.T) {
 	p := filepath.Join(dir, "client.yaml")
 	if err := os.WriteFile(p, []byte(`version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_x"
 machine:
   key: "home-server"
@@ -178,7 +178,7 @@ collectors:
 		t.Fatalf("page=%s", body)
 	}
 	form := url.Values{}
-	form.Set("url", "https://board.yinger650.com")
+	form.Set("url", "https://board.example.com")
 	form.Set("key", "home-server")
 	form.Add("feat", "cpu")
 	form.Add("feat", "ai.discover")
@@ -286,7 +286,7 @@ func TestWebBuildWritesPreview(t *testing.T) {
 	p := filepath.Join(dir, "client.yaml")
 	if err := os.WriteFile(p, []byte(`version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_x"
 machine:
   key: "home-server"
@@ -304,7 +304,7 @@ ai:
 	ts := httptest.NewServer(newWeb(p, &stubAI{text: script}))
 	defer ts.Close()
 	form := url.Values{}
-	form.Set("url", "https://board.yinger650.com")
+	form.Set("url", "https://board.example.com")
 	form.Set("key", "home-server")
 	form.Add("feat", "cpu")
 	form.Add("probe_key", "gpu")
@@ -359,7 +359,7 @@ func TestWebAddDeleteCustomRows(t *testing.T) {
 	p := filepath.Join(dir, "client.yaml")
 	if err := os.WriteFile(p, []byte(`version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_x"
 machine:
   key: "home-server"
@@ -371,7 +371,7 @@ storage:
 	ts := httptest.NewServer(newMux(p))
 	defer ts.Close()
 	form := url.Values{}
-	form.Set("url", "https://board.yinger650.com")
+	form.Set("url", "https://board.example.com")
 	form.Set("key", "home-server")
 	resp, err := http.PostForm(ts.URL+"/add-http", form)
 	if err != nil {
@@ -383,7 +383,7 @@ storage:
 	}
 	form.Add("http_key", "site-board")
 	form.Add("http_name", "AgentBoard")
-	form.Add("http_url", "https://board.yinger650.com/health/live")
+	form.Add("http_url", "https://board.example.com/health/live")
 	resp, err = http.PostForm(ts.URL+"/add-script", form)
 	if err != nil {
 		t.Fatal(err)
@@ -414,7 +414,7 @@ func TestWebJSONBuildExpandsIdeaThenPreview(t *testing.T) {
 	p := filepath.Join(dir, "client.yaml")
 	if err := os.WriteFile(p, []byte(`version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_x"
 machine:
   key: "home-server"
@@ -434,7 +434,7 @@ ai:
 	ts := httptest.NewServer(newWeb(p, ai))
 	defer ts.Close()
 	form := url.Values{}
-	form.Set("url", "https://board.yinger650.com")
+	form.Set("url", "https://board.example.com")
 	form.Set("key", "home-server")
 	form.Add("probe_key", "gpu")
 	form.Add("probe_key_edit", "gpu")
@@ -521,4 +521,19 @@ func contains(ids []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestNewFileLeavesURLEmpty(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "missing.yaml")
+	m, err := loadModel(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.NewFile {
+		t.Fatal("expected new file")
+	}
+	if m.URL != "" {
+		t.Fatalf("new file URL should be empty, got %q", m.URL)
+	}
 }

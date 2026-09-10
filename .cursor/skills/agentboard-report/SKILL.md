@@ -1,6 +1,6 @@
 # AgentBoard 上报
 
-本项目每次会话都必须上报：开始时 `start`，结束时 `succeed` / `fail`，被打断时 `interrupt`。发到 https://board.yinger650.com 。
+本项目每次会话都必须上报：开始时 `start`，结束时 `succeed` / `fail`，被打断时 `interrupt`。发到 `AGENTBOARD_URL`（项目 `.env`，不要写死域名）。
 
 - 项目 `.env` 的 `AGENTBOARD_TOKEN` → **virtual machine**
 - 本机 board-client 的 `ABP_MACHINE_TOKEN` + ingest → 物理机 `proj-*`

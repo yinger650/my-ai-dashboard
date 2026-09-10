@@ -83,7 +83,7 @@ export ABP_MACHINE_TOKEN='abp_m_...'      # 上一步复制的完整 Token
 
 ## 远程客户端（阿里云网站探测）
 
-在另一台 Linux 机器（例如阿里云）上只跑 `board-client`，把本机指标和若干网站的 HTTP 探测结果报到 https://board.yinger650.com 。不需要在该机器上安装 `board-server`。
+在另一台 Linux 机器（例如阿里云）上只跑 `board-client`，把本机指标和若干网站的 HTTP 探测结果报到你的看板（`server.url` = `ABP_PUBLIC_URL`）。不需要在该机器上安装 `board-server`。
 
 1. 在看板 **设置** 页创建机器，`machine_key` 填 `aliyun-web`（或与 YAML 里一致），复制 Machine Token。
 2. 交叉编译客户端：`make build-all`，把 `bin/board-client-linux-amd64` 拷到服务器 `/opt/agentboard/bin/board-client`。
@@ -109,7 +109,7 @@ GitHub Actions（`.github/workflows/board-client.yml`）在 **main** 上 client 
 并发布到滚动 Release：<https://github.com/yinger650/my-ai-dashboard/releases/latest>。GitHub Release 资源会 302 到 `release-assets.githubusercontent.com`（Azure），腾讯云等国内机器经常下载失败，所以生产客户端**优先**从看板自己的镜像拉：
 
 - 腾讯云本机：`http://127.0.0.1:8090/client-updates`
-- 阿里云远程：`https://board.yinger650.com/client-updates`
+- 远程客户端：`{ABP_PUBLIC_URL}/client-updates`
 
 `board-server` 提供公开 `GET /client-updates/{name}`，以及带 `ABP_CLIENT_UPDATE_TOKEN` 的 `PUT`。CI 在设置了 `BOARD_CLIENT_UPDATE_TOKEN` secret 时会把产物镜像上去；服务端也会按小时尝试从 GitHub 同步到 `{ABP_DATA_DIR}/client-updates`。客户端仍会校验 SHA-256 再替换自身。本地 `go run` 请保持 `update.enabled: false`。
 
@@ -184,7 +184,7 @@ make test-web
 
 ## Agent 自行上报（Cursor / Codex / Claude / OpenClaw / Hermes / Pi）
 
-除 `board-client` 采集器外，agent 应自己向 `https://board.yinger650.com` 发 HTTPS ingest，用来观察：
+除 `board-client` 采集器外，agent 应自己向 `AGENTBOARD_URL`（与看板 `ABP_PUBLIC_URL` 一致，写在项目 `.env`）发 HTTPS ingest，用来观察：
 
 - 长程任务是否做完（`start` → `progress` → `succeed`/`fail`）
 - 被打断（`interrupt`；来不及上报时约 30 分钟后服务端标 failed「任务被打断（无后续上报）」）

@@ -1,6 +1,6 @@
 # 小白教程：配置 board-client 上报日志
 
-这篇只教一件事：**让一台 Linux 机器把状态和日志报到看板**，打开 https://board.yinger650.com 就能看见。
+这篇只教一件事：**让一台 Linux 机器把状态和日志报到看板**，打开你部署的看板就能看见。
 
 不需要会 Go，也不需要手改 YAML。会 SSH、会复制粘贴即可。
 
@@ -35,7 +35,7 @@
 上报地址：
 
 - 这台机器和看板在同一台服务器上：一般是 `http://127.0.0.1:8090`
-- 另一台远程机器（阿里云等）：`https://board.yinger650.com`
+- 另一台远程机器（阿里云等）：看板的 `ABP_PUBLIC_URL`（例如 `https://board.example.com`）
 
 ---
 
@@ -103,7 +103,7 @@ sudo board-client config tui --config /etc/agentboard/client.yaml
 - `s`：保存
 - `q`：退出
 
-第一次没有文件时：网址默认 `https://board.yinger650.com`，机器代号默认 `home-server`。请改成第 1 步里的真实值。
+第一次没有文件时：网址留空，须填写看板对外地址（`ABP_PUBLIC_URL`）；机器代号默认 `home-server`。请改成第 1 步里的真实值。
 
 ### 方法 B：本机网页（WEB）
 
@@ -163,7 +163,7 @@ ssh -L 7439:127.0.0.1:7439 你的用户@这台机器
 
 - `service_key`：`site-board`
 - `name`：`AgentBoard`
-- `url`：`https://board.yinger650.com/health/live`
+- `url`：`https://board.example.com/health/live`（换成你的看板地址）
 
 探测失败时，看板上这条服务会变红，并写一条日志。
 

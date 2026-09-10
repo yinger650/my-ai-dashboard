@@ -5,10 +5,10 @@
 ```markdown
 ## AgentBoard
 
-长程任务必须向 AgentBoard 上报进度与结果，便于在 https://board.yinger650.com 查看是否完成。
+长程任务必须向 AgentBoard 上报进度与结果，便于在看板查看是否完成。
 
 - Token：环境变量 `AGENTBOARD_TOKEN`（项目 virtual machine 的 Machine Token）。未设置时若本机 board-client 开了 ingest，仍会投影到 `proj-*`；两边都没有则跳过，不要中断任务。
-- URL：`AGENTBOARD_URL`，默认 `https://board.yinger650.com`。
+- URL：`AGENTBOARD_URL`（项目 `.env` 或环境变量，须与看板 `ABP_PUBLIC_URL` 一致；未设置则跳过远程）。
 - Provider：Codex 设 `AGENTBOARD_PROVIDER=codex`。
 - 脚本：`python3 skills/agentboard-report/scripts/report.py <start|progress|error|succeed|fail|interrupt|heartbeat> "说明"`
 - 开始 `start`，里程碑 `progress`，出错 `error`，结束 `succeed`/`fail`，被打断 `interrupt`。每次 `start` 一条新 Run，不要手动设 `AGENTBOARD_RUN_KEY`。
@@ -26,7 +26,7 @@ mkdir -p ~/.codex
 Codex 用户级环境示例（`~/.bashrc` 或 secret store，不要进 git）：
 
 ```bash
-export AGENTBOARD_URL=https://board.yinger650.com
+export AGENTBOARD_URL=https://board.example.com   # 换成你的看板 ABP_PUBLIC_URL
 export AGENTBOARD_TOKEN=abp_m_...          # 只保存在本机
 export AGENTBOARD_PROVIDER=codex
 ```

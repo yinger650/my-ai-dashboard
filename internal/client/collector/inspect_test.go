@@ -78,7 +78,7 @@ server {
 }
 server {
     listen 443 ssl;
-    server_name board.yinger650.com;
+    server_name board.example.com;
     location / {
         proxy_pass http://board;
     }
@@ -97,7 +97,7 @@ server {
 		t.Fatalf("proxies = %d %+v", len(px), px)
 	}
 	eff := EffectiveProxies(px, []hostsnap.Port{{Port: 443, Process: "nginx"}})
-	if len(eff) != 1 || eff[0].ServerName != "board.yinger650.com" || eff[0].Upstream != "127.0.0.1:8090" {
+	if len(eff) != 1 || eff[0].ServerName != "board.example.com" || eff[0].Upstream != "127.0.0.1:8090" {
 		t.Fatalf("effective = %+v", eff)
 	}
 }

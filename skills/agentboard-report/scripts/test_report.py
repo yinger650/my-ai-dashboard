@@ -367,9 +367,38 @@ class LocalTeeWithoutToken(unittest.TestCase):
                 self.assertIn("run.transition", types)
                 meta = body["events"][0]["payload"].get("metadata") or {}
                 self.assertIn("workspace", meta)
+
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class ReportURL(unittest.TestCase):
+    def test_script_has_no_hardcoded_board_host(self):
+        src = SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn("board.yinger650.com", src)
+        self.assertNotIn("DEFAULT_URL", src)
+
+    def test_missing_url_skips_remote(self):
+        env = os.environ.copy()
+        env.update(
+            {
+                "AGENTBOARD_PROVIDER": "cursor",
+                "AGENTBOARD_TOKEN": "abp_m_test",
+                "AGENTBOARD_SOFT_FAIL": "1",
+                "AGENTBOARD_URL": "",
+                "CURSOR_CLOUD_AGENT": "",
+            }
+        )
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "start", "无看板地址"],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("AGENTBOARD_URL unset", proc.stderr)
 
 
 if __name__ == "__main__":
