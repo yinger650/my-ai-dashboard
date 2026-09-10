@@ -172,7 +172,9 @@ function SpellCard({ prompt, copied, onCopy }: { prompt: string; copied: boolean
           <Copy className="h-4 w-4" />
           {copied ? "已复制，丢给 Agent" : "复制给 Agent"}
         </Button>
-        <span className="text-xs text-slate-500">粘贴到 Cursor / Claude / Codex 对话框即可安装。</span>
+        <span className="text-xs text-slate-500">
+          粘贴到 Cursor / Claude / Codex 等对话框即可安装。口令会让 Agent 按自身设置 PROVIDER，不要写死成 cursor。
+        </span>
       </div>
     </div>
   );
@@ -360,7 +362,9 @@ function AgentGuide() {
           <ol className="list-decimal space-y-3 pl-5">
             <li>上方创建一台 virtual 机器，拿到 {MACHINE_KEY_PLACEHOLDER}。</li>
             <li>
-              仓库根目录 <code className="font-mono text-xs">.env</code>（不要提交）：
+              仓库根目录 <code className="font-mono text-xs">.env</code> 只放 URL 和 Token（不要提交）。
+              <code className="font-mono text-xs">AGENTBOARD_PROVIDER</code> 按当前 Agent 在跑{" "}
+              <code className="font-mono text-xs">report.py</code> 前 export：cursor / codex / claude / openclaw / hermes / pi，不要写进共享 .env。
               <div className="mt-2">
                 <CopyBlock
                   label=".env"

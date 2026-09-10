@@ -85,6 +85,8 @@ describe("InstallPage", () => {
     const spell = screen.getByRole("blockquote");
     expect(spell.textContent).toContain(MACHINE_KEY_PLACEHOLDER);
     expect(screen.getByRole("button", { name: "复制给 Agent" })).toBeInTheDocument();
+    expect(spell.textContent).toContain("AGENTBOARD_PROVIDER 不要写进 .env");
+    expect(spell.textContent).toContain("cursor / codex / claude / openclaw / hermes / pi");
     expect(screen.getByText(/手动安装/)).toBeInTheDocument();
   });
 

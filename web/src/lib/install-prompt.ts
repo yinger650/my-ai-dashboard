@@ -9,6 +9,26 @@ export const LINUX_ASSETS = [
   { id: "arm64", file: "board-client-linux-arm64", label: "Linux ARM64" },
 ] as const;
 
+/** First-class AGENTBOARD_PROVIDER values. Determines the dashboard service card. */
+export const AGENTBOARD_PROVIDERS = [
+  { id: "cursor", product: "Cursor" },
+  { id: "codex", product: "Codex" },
+  { id: "claude", product: "Claude Code" },
+  { id: "openclaw", product: "OpenClaw" },
+  { id: "hermes", product: "Hermes" },
+  { id: "pi", product: "Pi" },
+] as const;
+
+export const PROVIDER_IDS = AGENTBOARD_PROVIDERS.map((p) => p.id).join(" / ");
+
+export const PROVIDER_MAP = AGENTBOARD_PROVIDERS.map((p) => `${p.product}→${p.id}`).join("，");
+
+export const PROVIDER_ENV_COMMENT = [
+  `# AGENTBOARD_PROVIDER 不要写进这份共享 .env（脚本会读 .env，写死成某一个会把同仓库其它 Agent 锁到同一张卡）。`,
+  `# 跑 report.py 前按「当前这个 Agent」export，取值：${PROVIDER_IDS}`,
+  `# ${PROVIDER_MAP}。OpenClaw 另外要周期性 heartbeat。`,
+].join("\n");
+
 export function boardOrigin(publicUrl: string, fallback = ""): string {
   const raw = (publicUrl || fallback).trim();
   return raw.replace(/\/+$/, "");
@@ -22,11 +42,11 @@ export function agentInstallPrompt(boardUrl: string, machineKey: string): string
     `把 AgentBoard 装进当前项目，并立刻开始上报。`,
     `看板地址：${url}`,
     `项目 Machine Token：${key}`,
-    `从 ${SKILL_REPO} 拉取 skills/agentboard-report（必须含 scripts/report.py）。把下面三行写入仓库根目录 .env（已 gitignore，禁止提交）：`,
+    `从 ${SKILL_REPO} 拉取 skills/agentboard-report（必须含 scripts/report.py）。把下面两行写入仓库根目录 .env（已 gitignore，禁止提交）：`,
     `AGENTBOARD_URL=${url}`,
     `AGENTBOARD_TOKEN=${key}`,
-    `AGENTBOARD_PROVIDER=cursor`,
-    `把 skills/agentboard-report/always-on.md 并入 AGENTS.md；Cursor 再写入 .cursor/rules；Claude Code 再写入 CLAUDE.md。装好后立刻 start「正在验证 AgentBoard 上报」，看板上出现任务后再 succeed。不要把 Token 提交进 git。`,
+    `AGENTBOARD_PROVIDER 不要写进 .env。它决定看板上的服务卡片，必须按正在执行任务的这个 Agent 设置，取值：${PROVIDER_IDS}（${PROVIDER_MAP}）。跑 report.py 前 export AGENTBOARD_PROVIDER=对应值；脚本会读 .env，若写死成某一个，同仓库里其它 Agent 也会被锁到那张卡。`,
+    `把 skills/agentboard-report/always-on.md 并入 AGENTS.md；Cursor 再写入 .cursor/rules；Claude Code 再写入 CLAUDE.md。装好后立刻用当前 Agent 对应的 PROVIDER start「正在验证 AgentBoard 上报」，看板上出现任务后再 succeed。不要把 Token 提交进 git。`,
   ].join("\n");
 }
 
@@ -81,6 +101,6 @@ export function agentEnvSnippet(boardUrl: string, machineKey: string): string {
   return [
     `AGENTBOARD_URL=${url}`,
     `AGENTBOARD_TOKEN=${key}`,
-    `AGENTBOARD_PROVIDER=cursor`,
+    PROVIDER_ENV_COMMENT,
   ].join("\n");
 }

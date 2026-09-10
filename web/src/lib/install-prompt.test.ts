@@ -3,6 +3,7 @@ import {
   BOARD_URL_PLACEHOLDER,
   GITHUB_CLIENT_DOWNLOAD,
   MACHINE_KEY_PLACEHOLDER,
+  PROVIDER_IDS,
   agentEnvSnippet,
   agentInstallPrompt,
   clientDownloadUrl,
@@ -25,6 +26,16 @@ describe("agentInstallPrompt", () => {
     expect(text).toContain("AGENTBOARD_TOKEN=abp_m_secret");
     expect(text).toContain("项目 Machine Token：abp_m_secret");
     expect(text).not.toContain(MACHINE_KEY_PLACEHOLDER);
+  });
+
+  it("tells the agent not to pin PROVIDER in shared .env", () => {
+    const text = agentInstallPrompt("https://board.example", "abp_m_x");
+    expect(text).toContain("AGENTBOARD_PROVIDER 不要写进 .env");
+    expect(text).toContain(PROVIDER_IDS);
+    expect(text).toContain("Cursor→cursor");
+    expect(text).toContain("Codex→codex");
+    expect(text).toContain("Claude Code→claude");
+    expect(text).not.toMatch(/^AGENTBOARD_PROVIDER=cursor$/m);
   });
 });
 
@@ -51,6 +62,10 @@ describe("host downloads and snippets", () => {
   });
 
   it("writes agent .env with placeholders or values", () => {
-    expect(agentEnvSnippet("https://b", "abp_m_x")).toContain("AGENTBOARD_TOKEN=abp_m_x");
+    const env = agentEnvSnippet("https://b", "abp_m_x");
+    expect(env).toContain("AGENTBOARD_TOKEN=abp_m_x");
+    expect(env).toContain("AGENTBOARD_URL=https://b");
+    expect(env).toContain("AGENTBOARD_PROVIDER 不要写进这份共享 .env");
+    expect(env).not.toMatch(/^AGENTBOARD_PROVIDER=/m);
   });
 });
