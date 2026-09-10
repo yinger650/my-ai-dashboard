@@ -22,10 +22,12 @@ https://<新域名>/<slug>/ingest/v1/events
 
 ## 部署
 
-1. 飞书开放平台创建企业自建应用，网页应用主页 = `https://<新域名>/`，重定向 URL = `https://<新域名>/auth/feishu/callback`。打开方式建议独立窗口。
+完整步骤（构建、systemd、nginx/TLS、飞书后台发版、验收）见 [飞书版部署手册](./feishu-deploy.md)。摘要：
+
+1. 飞书开放平台创建企业自建应用，网页应用主页 = `https://<新域名>/`，重定向 URL = `https://<新域名>/auth/feishu/callback`。打开方式建议独立窗口。改主页后必须创建版本并发布。
 2. 同一 git tag 构建 `board-server-feishu`。
 3. systemd 用 [deploy/board-server-feishu.service](../deploy/board-server-feishu.service)，环境见 [deploy/board-server-feishu.env.example](../deploy/board-server-feishu.env.example)。
-4. nginx 与 Personal 相同，只换 `server_name` 和上游端口。
+4. nginx 与 Personal 相同，只换 `server_name` 和上游端口。现网模板：[deploy/nginx-board.min-wang.com.conf](../deploy/nginx-board.min-wang.com.conf)。
 
 数据目录：
 

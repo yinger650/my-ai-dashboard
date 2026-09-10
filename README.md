@@ -5,7 +5,7 @@
 （[1.0 原稿](docs/archive/agentboard-personal-design-spec-v1.0.md)），包含：
 
 - **`board-server`**：单个 Go 进程，提供采集 API、管理后台 API、前端静态资源和后台清理（密码登录、单库）。
-- **`board-server-feishu`**：同一套看板与 ingest，飞书登录 + 每用户一份 SQLite。独立部署，见 [Feishu edition](docs/feishu-edition.md)。
+- **`board-server-feishu`**：同一套看板与 ingest，飞书登录 + 每用户一份 SQLite。独立部署，见 [Feishu edition](docs/feishu-edition.md) 与 [部署手册](docs/feishu-deploy.md)。
 - **`board-client`**：运行在被监控 Linux 机器上的 Go 采集器。Part 1 采集资源/端口/Docker/cron/nginx 快照，Part 2 Agent 整理后统一上报。
 - **`web`**：React + TypeScript + Vite + Tailwind 的响应式看板前端。
 

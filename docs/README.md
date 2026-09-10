@@ -3,6 +3,7 @@
 - [小白教程：给编码 Agent 装 AgentBoard 上报](./agent-report-tutorial.md)
 - [小白教程：配置 board-client 上报日志](./client-log-tutorial.md)
 - [Feishu edition（飞书多用户）](./feishu-edition.md)
+- [飞书版部署手册（board.min-wang.com）](./feishu-deploy.md)
 - [AgentBoard Personal 设计规格（现行）](./agentboard-personal-design-spec.md)
 - [v1.0 原稿（2026-08-18）](./archive/agentboard-personal-design-spec-v1.0.md)
 
