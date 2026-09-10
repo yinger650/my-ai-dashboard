@@ -74,7 +74,7 @@ func TestLoadHTTPTargets(t *testing.T) {
 	p := filepath.Join(dir, "client.yaml")
 	src := `version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token_env: "TEST_TOKEN_VAR"
 machine:
   key: "aliyun-web"
@@ -82,7 +82,7 @@ collectors:
   http:
     enabled: true
     targets:
-      - url: "https://board.yinger650.com/health/live"
+      - url: "https://board.example.com/health/live"
         expect_status: [200]
       - service_key: site-custom
         name: Custom
@@ -105,10 +105,10 @@ collectors:
 	if len(c.Collectors.HTTP.Targets) != 2 {
 		t.Fatalf("targets = %d", len(c.Collectors.HTTP.Targets))
 	}
-	if c.Collectors.HTTP.Targets[0].ServiceKey != "site-board-yinger650-com" {
+	if c.Collectors.HTTP.Targets[0].ServiceKey != "site-board-example-com" {
 		t.Errorf("auto service_key = %q", c.Collectors.HTTP.Targets[0].ServiceKey)
 	}
-	if c.Collectors.HTTP.Targets[0].Name != "board.yinger650.com" {
+	if c.Collectors.HTTP.Targets[0].Name != "board.example.com" {
 		t.Errorf("auto name = %q", c.Collectors.HTTP.Targets[0].Name)
 	}
 	if c.Collectors.HTTP.Targets[1].ServiceKey != "site-custom" {
@@ -125,7 +125,7 @@ func TestHTTPRejectsBadURLAndDuplicateKey(t *testing.T) {
 	t.Setenv("TEST_TOKEN_VAR", "abp_m_secret")
 	src := `version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token_env: "TEST_TOKEN_VAR"
 machine:
   key: "aliyun-web"
@@ -145,7 +145,7 @@ collectors:
 
 	src = `version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token_env: "TEST_TOKEN_VAR"
 machine:
   key: "aliyun-web"

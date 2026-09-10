@@ -67,15 +67,15 @@ jobs:
               --latest
           fi
 
-      - name: Mirror binaries to board.yinger650.com
+      - name: Mirror binaries to board-server /client-updates
         if: github.ref == 'refs/heads/main'
         env:
           BOARD_CLIENT_UPDATE_TOKEN: ${{ secrets.BOARD_CLIENT_UPDATE_TOKEN }}
-          BOARD_CLIENT_UPDATE_URL: https://board.yinger650.com/client-updates
+          BOARD_CLIENT_UPDATE_URL: ${{ secrets.BOARD_CLIENT_UPDATE_URL }}
         run: |
           set -euo pipefail
-          if [ -z "${BOARD_CLIENT_UPDATE_TOKEN}" ]; then
-            echo "skip: BOARD_CLIENT_UPDATE_TOKEN secret is not set"
+          if [ -z "${BOARD_CLIENT_UPDATE_TOKEN}" ] || [ -z "${BOARD_CLIENT_UPDATE_URL}" ]; then
+            echo "skip: BOARD_CLIENT_UPDATE_TOKEN or BOARD_CLIENT_UPDATE_URL secret is not set"
             exit 0
           fi
           for f in dist/client/*; do

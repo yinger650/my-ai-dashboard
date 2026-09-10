@@ -20,7 +20,7 @@
 | 飞书回调 | `https://board.min-wang.com/auth/feishu/callback` |
 | Agent 上报 | `https://board.min-wang.com/<slug>/ingest/v1/events`（slug 在看板设置页） |
 
-Personal 现网 `board.yinger650.com` 与本机 `board-client` **不要动**。
+已在跑的 Personal `board-server` 与本机 `board-client` **不要动**。
 
 ---
 

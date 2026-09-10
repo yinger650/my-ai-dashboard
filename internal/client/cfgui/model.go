@@ -56,7 +56,7 @@ func loadModel(path string) (*Model, error) {
 		Previews: map[string]string{},
 	}
 	if missing {
-		m.URL = "https://board.yinger650.com"
+		m.URL = ""
 		m.Key = "home-server"
 		m.origURL, m.origKey = "", ""
 		m.attachExt(nil, "")

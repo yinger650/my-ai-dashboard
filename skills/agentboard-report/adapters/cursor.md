@@ -32,7 +32,7 @@ cp -a skills/agentboard-report other-repo/skills/agentboard-report
 ## 环境变量（不要进 git）
 
 ```bash
-export AGENTBOARD_URL=https://board.yinger650.com
+export AGENTBOARD_URL=https://board.example.com   # 换成你的看板 ABP_PUBLIC_URL
 export AGENTBOARD_TOKEN=abp_m_...
 export AGENTBOARD_PROVIDER=cursor
 ```

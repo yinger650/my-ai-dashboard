@@ -25,7 +25,7 @@ openclaw skills list    # 应看到 agentboard-report
 写入 `~/.openclaw/openclaw.json` 的 env、systemd `EnvironmentFile`，或 shell profile：
 
 ```bash
-export AGENTBOARD_URL=https://board.yinger650.com
+export AGENTBOARD_URL=https://board.example.com   # 换成你的看板 ABP_PUBLIC_URL
 export AGENTBOARD_TOKEN=abp_m_...
 export AGENTBOARD_PROVIDER=openclaw
 export AGENTBOARD_SERVICE_KEY=openclaw
@@ -43,6 +43,6 @@ OpenClaw gating 需要 `python3`。没有 token 时若本机 ingest 在跑仍会
   python3 /path/to/skills/agentboard-report/scripts/report.py heartbeat "cron"
 ```
 
-超过 180s 没有心跳，https://board.yinger650.com 上 `openclaw` 服务会显示 **TTL 过期**（可能已挂）。
+超过 180s 没有心跳，看板上 `openclaw` 服务会显示 **TTL 过期**（可能已挂）。
 
 内部错误用 `error`；会话被掐掉用 `interrupt`。

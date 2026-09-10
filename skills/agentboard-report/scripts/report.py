@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Send AgentBoard ingest events to https://board.yinger650.com (or AGENTBOARD_URL).
+"""Send AgentBoard ingest events to AGENTBOARD_URL (env or project .env).
 
 Uses AGENTBOARD_TOKEN (the skill / virtual-machine key). Independent of
 board-client on the same host: that process reports the physical machine
 with its own token, including proj-* copies of local workspace activity.
 
-If AGENTBOARD_TOKEN is unset, remote ingest is skipped. When a local
-board-client advertise file has mode=tee, events are still copied to
-loopback for proj-* projection. Agents must not fail the user task.
+If AGENTBOARD_TOKEN or AGENTBOARD_URL is unset, remote ingest is skipped.
+When a local board-client advertise file has mode=tee, events are still
+copied to loopback for proj-* projection. Agents must not fail the user
+task. Do not hardcode a board hostname.
 """
 from __future__ import annotations
 
@@ -26,7 +27,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_URL = "https://board.yinger650.com"
 DEFAULT_TTL = 180
 SERVICE_KEY_RE = re.compile(r"^[a-z0-9._-]{1,64}$")
 
@@ -665,7 +665,7 @@ def main() -> int:
         service_key, name, extra_meta = resolve_identity(provider, scenario)
 
     token = env("AGENTBOARD_TOKEN")
-    url = env("AGENTBOARD_URL") or DEFAULT_URL
+    url = env("AGENTBOARD_URL")
 
     if args.command == "ping":
         if args.dry_run:
@@ -673,6 +673,9 @@ def main() -> int:
             return 0
         if not token:
             print("agentboard-report: AGENTBOARD_TOKEN unset; skip", file=sys.stderr)
+            return 0
+        if not url:
+            print("agentboard-report: AGENTBOARD_URL unset; skip", file=sys.stderr)
             return 0
         req = urllib.request.Request(
             url.rstrip("/") + "/ingest/v1/ping",
@@ -692,6 +695,10 @@ def main() -> int:
     if not events:
         return 0
     if token:
+        if not url:
+            sys.stderr.write("agentboard-report: AGENTBOARD_URL unset; remote skipped\n")
+            tee_to_local_ingest(events)
+            return 0
         rc = post(url, token, events, args.timeout, False)
         if rc == 0:
             tee_to_local_ingest(events)

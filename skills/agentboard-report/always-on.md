@@ -1,12 +1,12 @@
 # AgentBoard 会话上报
 
-本项目**每一次会话/任务**都必须向 https://board.yinger650.com 上报。
+本项目**每一次会话/任务**都必须向看板上报（地址来自项目 `.env` 的 `AGENTBOARD_URL`，不要写死域名）。
 
 1. **开始时**：立刻 `start`，一句话说明正在做什么
 2. **结束时**：成功 `succeed`（已完成 + 结果），失败 `fail`（原因）
 3. **被打断时**：用户停止、无法继续、会话被系统掐掉前，必须 `interrupt` 或 `fail "任务被打断：原因"`。禁止只 `start` 不收口。长等待（编译、测试）要 `progress`，以免看板把任务当成已中断。
 
-Token 在仓库根目录 `.env` 的 `AGENTBOARD_TOKEN`。脚本会自动读取。未设置 token 时：若本机 `board-client` 开了 ingest，仍会投影到 `proj-*`；两边都没有则静默跳过。**不要**因此失败，也**不要**向用户索要或打印 token。
+Token 与看板地址在仓库根目录 `.env` 的 `AGENTBOARD_TOKEN` / `AGENTBOARD_URL`。脚本会自动读取。未设置 token 时：若本机 `board-client` 开了 ingest，仍会投影到 `proj-*`；两边都没有则静默跳过。**不要**因此失败，也**不要**向用户索要或打印 token。
 
 每次 `start` 一条新 Run。不要设置 `AGENTBOARD_RUN_KEY`，除非明确要续同一条 Run。
 

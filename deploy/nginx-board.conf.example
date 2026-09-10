@@ -1,6 +1,10 @@
+# Copy to /etc/nginx/conf.d/<your-board-domain>.conf
+# Replace YOUR_BOARD_DOMAIN with the hostname in ABP_PUBLIC_URL (no scheme).
+# Certificate paths assume a typical BT/Let's Encrypt layout; adjust to your distro.
+
 server {
     listen 80;
-    server_name board.yinger650.com;
+    server_name YOUR_BOARD_DOMAIN;
     client_max_body_size 20m;
 
     location ^~ /.well-known/acme-challenge/ {
@@ -13,18 +17,18 @@ server {
         return 301 https://$host$request_uri;
     }
 
-    access_log /www/wwwlogs/board.yinger650.com.log;
-    error_log  /www/wwwlogs/board.yinger650.com.error.log;
+    access_log /www/wwwlogs/YOUR_BOARD_DOMAIN.log;
+    error_log  /www/wwwlogs/YOUR_BOARD_DOMAIN.error.log;
 }
 
 server {
     listen 443 ssl;
     http2 on;
-    server_name board.yinger650.com;
+    server_name YOUR_BOARD_DOMAIN;
     client_max_body_size 20m;
 
-    ssl_certificate     /www/server/panel/vhost/cert/board.yinger650.com/fullchain.pem;
-    ssl_certificate_key /www/server/panel/vhost/cert/board.yinger650.com/privkey.pem;
+    ssl_certificate     /www/server/panel/vhost/cert/YOUR_BOARD_DOMAIN/fullchain.pem;
+    ssl_certificate_key /www/server/panel/vhost/cert/YOUR_BOARD_DOMAIN/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers EECDH+CHACHA20:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256:!MD5;
     ssl_prefer_server_ciphers on;
@@ -63,6 +67,6 @@ server {
         proxy_send_timeout 60s;
     }
 
-    access_log /www/wwwlogs/board.yinger650.com.log;
-    error_log  /www/wwwlogs/board.yinger650.com.error.log;
+    access_log /www/wwwlogs/YOUR_BOARD_DOMAIN.log;
+    error_log  /www/wwwlogs/YOUR_BOARD_DOMAIN.error.log;
 }

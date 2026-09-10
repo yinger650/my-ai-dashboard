@@ -1,13 +1,13 @@
 ---
 name: agentboard-report
-description: Report long-running agent tasks, failures, interrupts, and OpenClaw/Cursor/Codex/Claude/Hermes/Pi liveness to board.yinger650.com. Use at start/end, on interrupt, on errors, and for heartbeats.
-homepage: https://board.yinger650.com
+description: Report long-running agent tasks, failures, interrupts, and OpenClaw/Cursor/Codex/Claude/Hermes/Pi liveness to AgentBoard (AGENTBOARD_URL). Use at start/end, on interrupt, on errors, and for heartbeats.
+homepage: https://github.com/yinger650/my-ai-dashboard
 metadata: {"openclaw": {"requires": {"bins": ["python3"]}, "primaryEnv": "AGENTBOARD_TOKEN"}}
 ---
 
 # AgentBoard 上报
 
-把本 agent 的长程任务进度、失败原因、被打断，以及（OpenClaw）进程是否还活着，发到 https://board.yinger650.com 。
+把本 agent 的长程任务进度、失败原因、被打断，以及（OpenClaw）进程是否还活着，发到看板（`AGENTBOARD_URL`，来自环境或项目 `.env`，不要写死域名）。
 
 ## 双通道（两把 machine key 可同时推）
 
@@ -42,8 +42,7 @@ metadata: {"openclaw": {"requires": {"bins": ["python3"]}, "primaryEnv": "AGENTB
 优先跑脚本（`{baseDir}` 是本 skill 目录）：
 
 ```bash
-export AGENTBOARD_URL="${AGENTBOARD_URL:-https://board.yinger650.com}"
-# AGENTBOARD_TOKEN 已由环境注入；不要打印它
+# AGENTBOARD_URL / AGENTBOARD_TOKEN 已由环境或项目 .env 注入；不要打印 token，不要写死看板域名
 export AGENTBOARD_PROVIDER="${AGENTBOARD_PROVIDER:-cursor}"   # cursor | codex | claude | openclaw | hermes | pi
 
 python3 "{baseDir}/scripts/report.py" heartbeat "alive"
@@ -70,7 +69,7 @@ AGENTBOARD_PROVIDER=openclaw AGENTBOARD_SERVICE_KEY=openclaw \
 | 变量 | 必填 | 说明 |
 |---|---|---|
 | `AGENTBOARD_TOKEN` | 否（无 token 且无本机 tee 则跳过） | 项目 virtual machine 的 Machine Token `abp_m_…` |
-| `AGENTBOARD_URL` | 否 | 默认 `https://board.yinger650.com` |
+| `AGENTBOARD_URL` | 否（无 URL 则跳过远程） | 看板对外地址，须与 `ABP_PUBLIC_URL` 一致；写在 `.env`，不要写死域名 |
 | `AGENTBOARD_PROVIDER` | 否 | `cursor` / `codex` / `claude` / `openclaw` / `hermes` / `pi` |
 | `AGENTBOARD_SERVICE_KEY` | 否 | 默认等于 provider |
 | `AGENTBOARD_SERVICE_NAME` | 否 | 看板上显示名 |

@@ -151,8 +151,8 @@ func TestSourcesPrefersBoardMirror(t *testing.T) {
 	if got[1] != "https://github.com/yinger650/my-ai-dashboard/releases/latest/download" {
 		t.Fatalf("second source %q", got[1])
 	}
-	dup := Sources("https://board.yinger650.com/", "https://board.yinger650.com/client-updates")
-	if len(dup) != 1 || dup[0] != "https://board.yinger650.com/client-updates" {
+	dup := Sources("https://board.example.com/", "https://board.example.com/client-updates")
+	if len(dup) != 1 || dup[0] != "https://board.example.com/client-updates" {
 		t.Fatalf("dedupe = %v", dup)
 	}
 }

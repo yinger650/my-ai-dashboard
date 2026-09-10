@@ -257,7 +257,7 @@ update:
   enabled: false
   # 国内机器请改成看板自己的镜像，避免直连 GitHub Release（会 302 到 Azure CDN）：
   # url: "http://127.0.0.1:8090/client-updates"
-  # url: "https://board.yinger650.com/client-updates"
+  # url: "https://board.example.com/client-updates"
   url: "https://github.com/yinger650/my-ai-dashboard/releases/latest/download"
   interval: 1h
 
@@ -314,7 +314,7 @@ collectors:
     targets:
       - service_key: site-board
         name: AgentBoard
-        url: "https://board.yinger650.com/health/live"
+        url: "https://board.example.com/health/live"  # 换成你的看板 ABP_PUBLIC_URL
         method: GET
         expect_status: [200]
   probes:

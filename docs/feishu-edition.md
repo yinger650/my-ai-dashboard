@@ -35,4 +35,4 @@ https://<新域名>/<slug>/ingest/v1/events
 - `{ABP_DATA_DIR}/workspaces/{slug}/board.db`：该用户的 AgentBoard Personal 库
 - `{ABP_DATA_DIR}/workspaces/{slug}/artifacts/`
 
-Personal 现网 `board.yinger650.com` 继续跑 `board-server`，不要把飞书版配到同一 `ABP_DATA_DIR`。
+已有的 Personal `board-server` 继续跑，不要把飞书版配到同一 `ABP_DATA_DIR`。

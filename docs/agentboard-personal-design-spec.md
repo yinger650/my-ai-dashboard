@@ -10,7 +10,7 @@
 >
 > 对应仓库版本：`board-server` / `board-client` **0.1.10**（`Makefile` `VERSION`）；客户端心跳上报 `collector_version` 为 **1.3.1**
 >
-> 生产地址：<https://board.yinger650.com>
+> 生产地址：由 `ABP_PUBLIC_URL` 决定（nginx `server_name` 与之相同，不要在仓库里写死某个域名）
 >
 > 目标读者：产品所有者、实现工程师、编码型 AI Agent
 >
@@ -330,7 +330,7 @@ flowchart TD
 | 环境变量 | 默认值 | 说明 |
 |---|---:|---|
 | `ABP_LISTEN_ADDR` | `127.0.0.1:8080` | HTTP 监听；生产示例为 `127.0.0.1:8090` |
-| `ABP_PUBLIC_URL` | 空则 `http://`+监听地址 | 生产必须设为 `https://board.yinger650.com` |
+| `ABP_PUBLIC_URL` | 空则 `http://`+监听地址 | 生产必须设为你的公网 HTTPS 地址 |
 | `ABP_DATA_DIR` | `/var/lib/agentboard` | 数据目录 |
 | `ABP_DB_PATH` | `$ABP_DATA_DIR/board.db` | SQLite 文件 |
 | `ABP_ARTIFACT_DIR` | `$ABP_DATA_DIR/artifacts` | 文件目录 |
@@ -883,7 +883,7 @@ board-client version
 ```yaml
 version: 1
 server:
-  url: "https://board.yinger650.com"
+  url: "https://board.example.com"
   machine_token: "abp_m_REPLACE_ME"
   machine_token_env: "ABP_MACHINE_TOKEN"
   timeout: 20s
@@ -973,7 +973,7 @@ collectors:
     targets:
       - service_key: site-board
         name: AgentBoard
-        url: "https://board.yinger650.com/health/live"
+        url: "https://board.example.com/health/live"
         method: GET
         expect_status: [200]
   probes:
@@ -1059,9 +1059,9 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 | 期望状态码且无传输错误 | `running` / normal |
 | 非期望状态码、超时、连接失败 | `failed` / error |
 
-同时 `status.upsert`：`http_status`、`latency_ms`、可选 `ssl_days`。状态变化时 `log.append`。`ttl_seconds` 默认 180，避免探测进程挂掉后服务永远显示 running。`service.state.metadata.path` / `url` 为探测 URL（例如 `https://yinger650.com/`），不是站点主机上的 nginx 路径。
+同时 `status.upsert`：`http_status`、`latency_ms`、可选 `ssl_days`。状态变化时 `log.append`。`ttl_seconds` 默认 180，避免探测进程挂掉后服务永远显示 running。`service.state.metadata.path` / `url` 为探测 URL（例如 `https://example.com/`），不是站点主机上的 nginx 路径。
 
-远程只跑客户端的部署见 `deploy/client-aliyun.yaml` 与 `deploy/board-client-remote.service`。User-Agent：`AgentBoard-Client/1.2 (+https://board.yinger650.com)`。
+远程只跑客户端的部署见 `deploy/client-aliyun.yaml` 与 `deploy/board-client-remote.service`。User-Agent：`AgentBoard-Client/1.2 (+https://github.com/yinger650/my-ai-dashboard)`。
 
 ### 14.8 Cursor transcript 扫描（1.1 新增）
 
@@ -1173,7 +1173,7 @@ Nginx（可选）：置顶只列配置已加载且 listen 能对上当前 `ss` �
 4. **依赖**：勾选巡检或 Agent 日志总结时，保存时若 `ai.enabled` 仍关则一并打开。取消巡检不得自动关闭总结。第一次勾选且对应子树为空时才写入 catalog seed；已有自定义子树只改 `enabled`。
 5. **YAML overlay**：按路径写入 `yaml.v3` Node，保留注释与未知键。禁止 `Read`（`applyDefaults`）后再整文件 `Marshal`。校验仍走现有 `Load`。保存后 `control.sock` `reload`。
 6. **升级只提醒**：runner 对照 spool `client_state.seen_features` 与目录 id。空 seen 时先把**当前 YAML 已存在/已开启**的 id 记为基线，避免把已在用的 CPU 等标成新增。剩余未审 id 在 `board-client` 上 `log.append` 一条中文说明（含两条 config 命令），并 `status.upsert` `config_new_features`。用户在配置 UI **保存一次**（即使新功能都不勾）把当前目录 id 写入 `seen_features`，提醒消失。升级路径本身不写 YAML。不得自动拉起 TUI（无 TTY）或 WEB（避免突然占端口）。
-7. **首次无文件**：URL 默认 `https://board.yinger650.com`；主机指标类默认勾选；可选能力（AI 巡检、HTTP 探测等）不勾。
+7. **首次无文件**：URL 留空，须填写看板对外地址（`ABP_PUBLIC_URL`）；主机指标类默认勾选；可选能力（AI 巡检、HTTP 探测等）不勾。
 8. WEB 仍仅 loopback。看板 WEB **禁止**下发或编辑 client YAML。
 
 ### 14.14 自然语言扩展采集（1.4 新增）
@@ -1259,7 +1259,7 @@ Agent **自己**发 HTTPS ingest，不是 `board-client`。
 | 安装教程 | `docs/agent-report-tutorial.md` |
 
 ```bash
-export AGENTBOARD_URL="${AGENTBOARD_URL:-https://board.yinger650.com}"
+# AGENTBOARD_URL 来自项目 .env，须与看板 ABP_PUBLIC_URL 一致；不要写死域名
 export AGENTBOARD_PROVIDER="${AGENTBOARD_PROVIDER:-cursor}"   # cursor | codex | claude | openclaw | hermes | pi
 python3 skills/agentboard-report/scripts/report.py start "一句话任务目标"
 python3 skills/agentboard-report/scripts/report.py interrupt "用户停止"
@@ -1538,8 +1538,8 @@ Artifact 上传前检查配额。数据库无法写入时 `/health/ready` 必须
 
 | 项 | 值 |
 |---|---|
-| 域名 | `board.yinger650.com` |
-| 反代 | nginx → `127.0.0.1:8090`（`deploy/nginx-board.yinger650.com.conf`） |
+| 域名 | `ABP_PUBLIC_URL` 的主机名（按部署填写） |
+| 反代 | nginx → `127.0.0.1:8090`（模板 `deploy/nginx-board.conf.example`） |
 | 数据目录 | `/var/lib/agentboard` |
 | 二进制 | `/opt/agentboard/bin/board-server` |
 | 环境文件 | `/etc/agentboard/board-server.env`（由 `deploy/board-server.env.example` 复制） |

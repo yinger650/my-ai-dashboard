@@ -122,7 +122,7 @@ collectors:
     targets:
       - service_key: site-board
         name: AgentBoard
-        url: "https://board.yinger650.com/health/live"
+        url: "https://board.example.com/health/live"
         method: GET
         expect_status: [200]
 ```
