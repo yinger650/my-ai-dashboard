@@ -8,6 +8,7 @@ import { cn } from "../lib/utils";
 
 const navItems = [
   { to: "/", label: "看板", end: true },
+  { to: "/install", label: "安装", end: false },
   { to: "/access", label: "访问记录", end: false },
   { to: "/settings", label: "设置", end: false },
 ];

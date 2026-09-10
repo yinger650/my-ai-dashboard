@@ -8,6 +8,7 @@ import { MachineDetailPage } from "./pages/MachineDetail";
 import { ServiceDetailPage } from "./pages/ServiceDetail";
 import { AccessPage } from "./pages/Access";
 import { SettingsPage } from "./pages/Settings";
+import { InstallPage } from "./pages/Install";
 
 export default function App() {
   const location = useLocation();
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/machines/:machineId" element={<MachineDetailPage />} />
         <Route path="/services/:serviceId" element={<ServiceDetailPage />} />
+        <Route path="/install/*" element={<InstallPage />} />
         <Route path="/access" element={<AccessPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

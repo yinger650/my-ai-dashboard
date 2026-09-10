@@ -17,6 +17,7 @@ export default defineConfig({
       '/auth': { target: backend, changeOrigin: true },
       '/ingest': { target: backend, changeOrigin: true },
       '/health': { target: backend, changeOrigin: true },
+      '/client-updates': { target: backend, changeOrigin: true },
     },
   },
   test: {
